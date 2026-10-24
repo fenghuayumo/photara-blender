@@ -23,40 +23,6 @@ class PhotaraExportError(Exception):
     pass
 
 
-_PREVIEW_COLLECTION_TAG = "photara_camera_preview_owner"
-_PREVIEW_OBJECT_TAG = "photara_camera_preview"
-_PREVIEW_OWNER = "photara_render"
-_MAX_PREVIEW_CAMERAS = 1000
-
-
-def _get_preview_collection(scene, create=False):
-    collection = next(
-        (item for item in bpy.data.collections
-         if item.get(_PREVIEW_COLLECTION_TAG) == _PREVIEW_OWNER),
-        None,
-    )
-    if collection is None and create:
-        collection = bpy.data.collections.new("Photara Camera Preview")
-        collection[_PREVIEW_COLLECTION_TAG] = _PREVIEW_OWNER
-        scene.collection.children.link(collection)
-    elif collection is not None and not any(
-        child == collection for child in scene.collection.children
-    ):
-        scene.collection.children.link(collection)
-    if collection is not None:
-        collection.hide_render = True
-    return collection
-
-
-def _clear_preview_objects(collection):
-    if collection is None:
-        return 0
-    preview_objects = [obj for obj in collection.objects if obj.get(_PREVIEW_OBJECT_TAG)]
-    for obj in preview_objects:
-        bpy.data.objects.remove(obj, do_unlink=True)
-    return len(preview_objects)
-
-
 class RenderJob:
     """Prepare / step / finish job used by both the modal and the blocking path."""
 
@@ -83,9 +49,6 @@ class RenderJob:
         self._orbit_camera = None
         self._orbit_target_center = None
         self._orbit_radius = 0.0
-        self._generated_poses = []
-        self._async_pending_record = None
-        self._cancel_requested = False
 
     # ------------------------------------------------------------------ prepare
     def prepare(self):
@@ -108,16 +71,7 @@ class RenderJob:
                 raise PhotaraExportError("360° 环绕模式需要选择目标物体")
             if target == camera:
                 raise PhotaraExportError("目标物体不能是拍摄相机")
-            self._generated_poses = self._build_orbit_poses(target)
-            self.frames = list(range(1, len(self._generated_poses) + 1))
-        elif props.capture_mode == "BOX_GRID":
-            bounds_object = props.box_bounds_object
-            if bounds_object is None:
-                raise PhotaraExportError("室内 Box 点阵模式需要选择 Room Bounds 边界物体")
-            if bounds_object == camera:
-                raise PhotaraExportError("Room Bounds 不能是拍摄相机")
-            self._generated_poses = self._build_box_grid_poses(bounds_object)
-            self.frames = list(range(1, len(self._generated_poses) + 1))
+            self.frames = list(range(1, int(props.orbit_shots) + 1))
         else:
             if props.use_scene_frame_range:
                 start, end = scene.frame_start, scene.frame_end
@@ -162,8 +116,6 @@ class RenderJob:
         self._original_camera = scene.camera
         if props.capture_mode == "ORBIT":
             self._prepare_orbit_camera(camera, props.orbit_target)
-        elif props.capture_mode == "BOX_GRID":
-            self._create_generated_camera(camera, "Photara Box Grid Camera")
 
         fmt = props.image_format
         img.file_format = fmt
@@ -174,7 +126,7 @@ class RenderJob:
         render.use_file_extension = False
         if props.force_opaque:
             render.film_transparent = False
-        if props.capture_mode == "ANIMATION" and props.camera and props.camera != scene.camera:
+        if props.capture_mode != "ORBIT" and props.camera and props.camera != scene.camera:
             scene.camera = props.camera
 
         self._prepared = True
@@ -184,10 +136,6 @@ class RenderJob:
 
     def _prepare_orbit_camera(self, source_camera, target):
         """Create a temporary, unanimated camera using the selected camera's optics."""
-        self._create_generated_camera(source_camera, "Photara Orbit Camera")
-
-    def _build_orbit_poses(self, target):
-        props = self.props
         deps = bpy.context.evaluated_depsgraph_get()
         target_eval = target.evaluated_get(deps)
         corners = [target_eval.matrix_world @ Vector(corner) for corner in target_eval.bound_box]
@@ -202,126 +150,35 @@ class RenderJob:
             size = max(target_eval.dimensions)
         if size <= 1e-6:
             size = 1.0
-        radius = size * float(props.orbit_radius_factor)
-        levels = int(props.orbit_levels)
-        total_shots = int(props.orbit_shots)
-        if total_shots < levels:
-            raise PhotaraExportError("Total Shots 不能少于 Elevation Rings")
-        if props.orbit_coverage == "UPPER_HEMISPHERE":
-            elevation_min, elevation_max = 0.0, math.pi * 0.5
-        elif props.orbit_coverage == "FULL_SPHERE":
-            elevation_min, elevation_max = -math.pi * 0.5, math.pi * 0.5
-        else:
-            elevation_min = float(props.orbit_elevation_min)
-            elevation_max = float(props.orbit_elevation_max)
-        if levels > 1 and elevation_max <= elevation_min:
-            raise PhotaraExportError("多层球面环绕要求 Max Elevation 大于 Min Elevation")
-        if levels == 1:
-            if props.orbit_coverage == "UPPER_HEMISPHERE":
-                elevations = [math.pi * 0.25]
-            else:
-                elevations = [min(max(0.0, elevation_min), elevation_max)]
-        else:
-            elevations = [
-                elevation_min + (elevation_max - elevation_min) * ring / (levels - 1)
-                for ring in range(levels)
-            ]
-        # Keep a tiny azimuth radius at the poles so each shot remains a distinct pose.
-        pole_limit = math.radians(89.5)
-        elevations = [
-            max(-pole_limit, min(pole_limit, elevation)) for elevation in elevations
-        ]
-
-        base_shots, extra_shots = divmod(total_shots, levels)
-        start_angle = float(props.orbit_start_angle)
-        poses = []
-        for ring, elevation in enumerate(elevations):
-            ring_shots = base_shots + (1 if ring < extra_shots else 0)
-            stagger = math.pi / ring_shots if ring % 2 else 0.0
-            for shot in range(ring_shots):
-                azimuth = start_angle + stagger + 2.0 * math.pi * shot / ring_shots
-                position = Vector((
-                    center.x + radius * math.cos(elevation) * math.cos(azimuth),
-                    center.y + radius * math.cos(elevation) * math.sin(azimuth),
-                    center.z + radius * math.sin(elevation),
-                ))
-                matrix = (center - position).to_track_quat("-Z", "Y").to_matrix().to_4x4()
-                matrix.translation = position
-                poses.append(matrix)
         self._orbit_target_center = center
-        self._orbit_radius = radius
-        return poses
+        self._orbit_radius = size * float(self.props.orbit_radius_factor)
 
-    def _create_generated_camera(self, source_camera, name):
-        camera = source_camera.copy()
-        camera.data = source_camera.data.copy()
-        camera.name = name
-        camera.parent = None
-        camera.animation_data_clear()
-        for constraint in list(camera.constraints):
-            camera.constraints.remove(constraint)
-        self.scene.collection.objects.link(camera)
-        camera.matrix_world = source_camera.matrix_world.copy()
-        self._orbit_camera = camera
-        self.camera = camera
-        self.scene.camera = camera
-
-    def _build_box_grid_poses(self, bounds_object):
-        props = self.props
-        deps = bpy.context.evaluated_depsgraph_get()
-        bounds_eval = bounds_object.evaluated_get(deps)
-        corners = [bounds_eval.matrix_world @ Vector(corner) for corner in bounds_eval.bound_box]
-        if not corners:
-            raise PhotaraExportError("Room Bounds 没有有效的边界盒")
-        low = Vector(tuple(min(point[i] for point in corners) for i in range(3)))
-        high = Vector(tuple(max(point[i] for point in corners) for i in range(3)))
-        margin = float(props.box_margin)
-        if any(high[i] - low[i] <= 2.0 * margin for i in range(3)):
-            raise PhotaraExportError("Room Bounds 太小：边界盒尺寸必须大于两倍边距")
-
-        def samples(axis, count):
-            minimum = low[axis] + margin
-            maximum = high[axis] - margin
-            if count == 1:
-                return [(minimum + maximum) * 0.5]
-            return [minimum + (maximum - minimum) * i / (count - 1) for i in range(count)]
-
-        xs = samples(0, int(props.box_grid_x))
-        ys = samples(1, int(props.box_grid_y))
-        if props.box_grid_z == 1:
-            z = low.z + float(props.box_camera_height)
-            if z < low.z + margin or z > high.z - margin:
-                raise PhotaraExportError("Camera Height 必须位于上下边距范围内")
-            zs = [z]
-        else:
-            zs = samples(2, int(props.box_grid_z))
-
-        views = int(props.box_views_per_point)
-        total = len(xs) * len(ys) * len(zs) * views
-        if total > 5000:
-            raise PhotaraExportError("点阵将生成 {} 张图像；请减少网格数或每点方向数（上限 5000）".format(total))
-
-        poses = []
-        start_angle = float(props.box_start_angle)
-        pitch = float(props.box_pitch)
-        for z in zs:
-            for y in ys:
-                for x in xs:
-                    position = Vector((x, y, z))
-                    for view in range(views):
-                        yaw = start_angle + 2.0 * math.pi * view / views
-                        direction = Vector((
-                            math.cos(yaw) * math.cos(pitch),
-                            math.sin(yaw) * math.cos(pitch),
-                            math.sin(pitch),
-                        ))
-                        matrix = direction.to_track_quat("-Z", "Y").to_matrix().to_4x4()
-                        matrix.translation = position
-                        poses.append(matrix)
-        return poses
+        orbit_camera = source_camera.copy()
+        orbit_camera.data = source_camera.data.copy()
+        orbit_camera.name = "Photara Orbit Camera"
+        orbit_camera.parent = None
+        orbit_camera.animation_data_clear()
+        for constraint in list(orbit_camera.constraints):
+            orbit_camera.constraints.remove(constraint)
+        self.scene.collection.objects.link(orbit_camera)
+        orbit_camera.matrix_world = source_camera.matrix_world.copy()
+        self._orbit_camera = orbit_camera
+        self.camera = orbit_camera
+        self.scene.camera = orbit_camera
 
     def _orbit_matrix(self, shot_index):
-        return self._generated_poses[shot_index]
+        props = self.props
+        angle = float(props.orbit_start_angle) + 2.0 * math.pi * shot_index / len(self.frames)
+        center = self._orbit_target_center
+        position = Vector((
+            center.x + self._orbit_radius * math.cos(angle),
+            center.y + self._orbit_radius * math.sin(angle),
+            center.z + float(props.orbit_height),
+        ))
+        rotation = (center - position).to_track_quat("-Z", "Y")
+        matrix = rotation.to_matrix().to_4x4()
+        matrix.translation = position
+        return matrix
 
     def _cleanup_old_frames(self):
         """Remove only our own frame_XXXXXXXX files inside the images dir."""
@@ -345,25 +202,11 @@ class RenderJob:
         if self._index >= len(self.frames):
             return self._finish_exports()
 
-        record, filepath = self._prepare_current_frame()
-        self.scene.render.filepath = filepath
-        bpy.ops.render.render(write_still=True)
-        self._complete_current_frame(record)
-
-        if self._index >= len(self.frames):
-            return self._finish_exports()
-        return False
-
-    def _prepare_current_frame(self):
         props = self.props
         scene = self.scene
         frame = self.frames[self._index]
         if props.capture_mode == "ORBIT":
             self.camera.matrix_world = self._orbit_matrix(self._index)
-            scene.frame_set(int(self._original_frame), subframe=self._original_frame - int(self._original_frame))
-            bpy.context.view_layer.update()
-        elif props.capture_mode == "BOX_GRID":
-            self.camera.matrix_world = self._generated_poses[self._index]
             scene.frame_set(int(self._original_frame), subframe=self._original_frame - int(self._original_frame))
             bpy.context.view_layer.update()
         else:
@@ -385,8 +228,12 @@ class RenderJob:
         self._intr_min = fx if self._intr_min is None else min(self._intr_min, fx)
         self._intr_max = fx if self._intr_max is None else max(self._intr_max, fx)
 
-        filename = "frame_{:08d}{}".format(frame, FORMAT_EXT[props.image_format])
-        return (
+        ext = FORMAT_EXT[props.image_format]
+        filename = "frame_{:08d}{}".format(frame, ext)
+        scene.render.filepath = os.path.join(self.images_dir, filename)
+        bpy.ops.render.render(write_still=True)
+
+        self.records.append(
             {
                 "filename": filename,
                 "matrix_world": matrix,
@@ -394,63 +241,15 @@ class RenderJob:
                 "height": self.height,
                 "intrinsics": intr,
                 "frame": frame,
-            },
-            os.path.join(self.images_dir, filename),
+            }
         )
-
-    def _complete_current_frame(self, record):
-        self.records.append(record)
         self._index += 1
-        self.props.progress = self._index / float(len(self.frames))
-        self.props.status = "渲染中 {}/{}（frame {}）".format(
-            self._index, len(self.frames), record["frame"]
-        )
-
-    def step_async(self):
-        """Start or poll a UI-friendly render. Returns True when export is complete."""
-        if not self._prepared:
-            raise PhotaraExportError("任务尚未准备")
-        if self._async_pending_record is not None:
-            if bpy.app.is_job_running("RENDER"):
-                return False
-            record = self._async_pending_record
-            self._async_pending_record = None
-            self._complete_current_frame(record)
-            if self._cancel_requested:
-                return False
-            if self._index >= len(self.frames):
-                return self._finish_exports()
-            return False
+        props.progress = self._index / float(len(self.frames))
+        props.status = "渲染中 {}/{}（frame {}）".format(self._index, len(self.frames), frame)
 
         if self._index >= len(self.frames):
             return self._finish_exports()
-        if self._cancel_requested:
-            return False
-
-        record, filepath = self._prepare_current_frame()
-        self.scene.render.filepath = filepath
-        self._async_pending_record = record
-        result = bpy.ops.render.render("INVOKE_DEFAULT", write_still=True)
-        if "CANCELLED" in result:
-            self._async_pending_record = None
-            raise RuntimeError("Blender 取消了当前图像渲染")
-        if "RUNNING_MODAL" not in result and not bpy.app.is_job_running("RENDER"):
-            self._async_pending_record = None
-            self._complete_current_frame(record)
-            if self._index >= len(self.frames):
-                return self._finish_exports()
         return False
-
-    def request_cancel(self):
-        if self._cancel_requested:
-            return
-        self._cancel_requested = True
-        self.props.cancel_requested = True
-        if self._async_pending_record is not None and bpy.app.is_job_running("RENDER"):
-            try:
-                bpy.ops.render.view_cancel()
-            except Exception:
-                pass
 
     def _finish_exports(self):
         if self._exported:
@@ -470,23 +269,14 @@ class RenderJob:
                 "blender_version": bpy.app.version_string,
                 "frame_range": (
                     [self.frames[0], self.frames[-1], 1]
-                    if props.capture_mode in ("ORBIT", "BOX_GRID")
+                    if props.capture_mode == "ORBIT"
                     else [self.frames[0], self.frames[-1], props.frame_step]
                 ),
                 "image_format": props.image_format,
                 "capture_mode": props.capture_mode,
                 **({"orbit_target": props.orbit_target.name,
-                    "orbit_source_frame": int(self._original_frame),
-                    "orbit_levels": props.orbit_levels,
-                    "orbit_elevation_range": [
-                        float(props.orbit_elevation_min), float(props.orbit_elevation_max)
-                    ]}
+                    "orbit_source_frame": int(self._original_frame)}
                    if props.capture_mode == "ORBIT" else {}),
-                **({"room_bounds": props.box_bounds_object.name,
-                    "box_grid": [props.box_grid_x, props.box_grid_y, props.box_grid_z],
-                    "views_per_point": int(props.box_views_per_point),
-                    "box_source_frame": int(self._original_frame)}
-                   if props.capture_mode == "BOX_GRID" else {}),
             },
         )
         self._exported = True
@@ -497,13 +287,11 @@ class RenderJob:
 
     # ------------------------------------------------------------------ finish
     def finish(self, cancelled=False, deliver=False, use_async=True):
-        if self._finished or (not self._prepared and self._orbit_camera is None):
+        if self._finished or not self._prepared:
             return
         self._finished = True
 
         props = self.props
-        props.is_rendering = False
-        props.cancel_requested = False
         render = self.scene.render
         img = render.image_settings
         o = self._originals
@@ -575,25 +363,11 @@ def _record_poses_blocking(context):
     if camera.data.type != "PERSP":
         raise PhotaraExportError("相机必须是透视相机")
 
-    generated_poses = None
-    if props.capture_mode == "ORBIT":
-        if props.orbit_target is None:
-            raise PhotaraExportError("360° 环绕模式需要选择目标物体")
-        generator = RenderJob(context)
-        generated_poses = generator._build_orbit_poses(props.orbit_target)
-        frames = list(range(1, len(generated_poses) + 1))
-    elif props.capture_mode == "BOX_GRID":
-        if props.box_bounds_object is None:
-            raise PhotaraExportError("室内 Box 点阵模式需要选择 Room Bounds 边界物体")
-        generator = RenderJob(context)
-        generated_poses = generator._build_box_grid_poses(props.box_bounds_object)
-        frames = list(range(1, len(generated_poses) + 1))
+    if props.use_scene_frame_range:
+        start, end = scene.frame_start, scene.frame_end
     else:
-        if props.use_scene_frame_range:
-            start, end = scene.frame_start, scene.frame_end
-        else:
-            start, end = props.frame_start, props.frame_end
-        frames = list(range(int(start), int(end) + 1, max(1, int(props.frame_step))))
+        start, end = props.frame_start, props.frame_end
+    frames = list(range(int(start), int(end) + 1, max(1, int(props.frame_step))))
     if not frames:
         raise PhotaraExportError("帧范围为空")
 
@@ -608,16 +382,12 @@ def _record_poses_blocking(context):
     original_frame = float(scene.frame_current)
     records = []
     intr = None
-    for shot_index, frame in enumerate(frames):
-        if generated_poses is None:
-            scene.frame_set(frame, subframe=0.0)
+    for frame in frames:
+        scene.frame_set(frame, subframe=0.0)
         deps = context.evaluated_depsgraph_get()
         cam_eval = camera.evaluated_get(deps)
-        if generated_poses is None:
-            rigid_pose = cam_eval.matrix_world.to_quaternion().to_matrix().to_4x4()
-            rigid_pose.translation = cam_eval.matrix_world.translation
-        else:
-            rigid_pose = generated_poses[shot_index]
+        rigid_pose = cam_eval.matrix_world.to_quaternion().to_matrix().to_4x4()
+        rigid_pose.translation = cam_eval.matrix_world.translation
         records.append(
             {
                 "filename": "frame_{:08d}{}".format(frame, ext),
@@ -633,9 +403,8 @@ def _record_poses_blocking(context):
         records[-1]["intrinsics"] = current_intrinsics
         if intr is None:
             intr = current_intrinsics
-    if generated_poses is None:
-        frame = original_frame
-        scene.frame_set(int(frame), subframe=frame - int(frame))
+    frame = original_frame
+    scene.frame_set(int(frame), subframe=frame - int(frame))
 
     missing = [
         r["filename"]
@@ -652,21 +421,8 @@ def _record_poses_blocking(context):
         write_transforms=props.export_transforms_json,
         meta={
             "blender_version": bpy.app.version_string,
-            "frame_range": [frames[0], frames[-1], 1 if generated_poses is not None else props.frame_step],
+            "frame_range": [frames[0], frames[-1], props.frame_step],
             "image_format": props.image_format,
-            "capture_mode": props.capture_mode,
-            **({"orbit_target": props.orbit_target.name,
-                "orbit_source_frame": int(original_frame),
-                "orbit_levels": props.orbit_levels,
-                "orbit_elevation_range": [
-                    float(props.orbit_elevation_min), float(props.orbit_elevation_max)
-                ]}
-               if props.capture_mode == "ORBIT" else {}),
-            **({"room_bounds": props.box_bounds_object.name,
-                "box_grid": [props.box_grid_x, props.box_grid_y, props.box_grid_z],
-                "views_per_point": int(props.box_views_per_point),
-                "box_source_frame": int(original_frame)}
-               if props.capture_mode == "BOX_GRID" else {}),
         },
     )
     return records, dataset_dir, missing
@@ -699,34 +455,21 @@ class PHOTARA_OT_render_and_export(bpy.types.Operator):
             self.report({"ERROR"}, "输出目录无法创建：{}".format(e))
             return {"CANCELLED"}
 
-        context.scene.photara.cancel_requested = False
-        context.scene.photara.is_rendering = True
-        self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
+        self._timer = context.window_manager.event_timer_add(0.0, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
         if event.type == "ESC":
-            self.job.request_cancel()
-            if not bpy.app.is_job_running("RENDER"):
-                self.job.finish(cancelled=True)
-                self._remove_timer(context)
-                context.scene.photara.status = "已取消"
-                self.report({"WARNING"}, "已取消（已渲染文件保留）")
-                return {"CANCELLED"}
-            return {"PASS_THROUGH"}
+            self.job.finish(cancelled=True)
+            self._remove_timer(context)
+            context.scene.photara.status = "已取消"
+            self.report({"WARNING"}, "已取消（已渲染文件保留）")
+            return {"CANCELLED"}
 
         if event.type == "TIMER":
             try:
-                if context.scene.photara.cancel_requested and not self.job._cancel_requested:
-                    self.job.request_cancel()
-                if self.job._cancel_requested and not bpy.app.is_job_running("RENDER"):
-                    self.job.finish(cancelled=True)
-                    self._remove_timer(context)
-                    context.scene.photara.status = "已取消"
-                    self.report({"WARNING"}, "已取消（已渲染文件保留）")
-                    return {"CANCELLED"}
-                done = self.job.step_async()
+                done = self.job.step()
             except PhotaraExportError as e:
                 self.job.finish(cancelled=True)
                 self._remove_timer(context)
@@ -775,103 +518,6 @@ class PHOTARA_OT_render_and_export(bpy.types.Operator):
             except Exception:
                 pass
             self._timer = None
-
-
-class PHOTARA_OT_cancel_render(bpy.types.Operator):
-    """Request cancellation of the active Photara frame sequence."""
-
-    bl_idname = "photara.cancel_render"
-    bl_label = "Cancel Render"
-    bl_options = {"INTERNAL"}
-
-    def execute(self, context):
-        props = context.scene.photara
-        if not props.is_rendering:
-            self.report({"INFO"}, "当前没有正在运行的 Photara 渲染")
-            return {"CANCELLED"}
-        props.cancel_requested = True
-        props.status = "正在取消当前帧渲染…"
-        return {"FINISHED"}
-
-
-class PHOTARA_OT_preview_camera_positions(bpy.types.Operator):
-    """Show generated ORBIT or BOX_GRID camera poses in the 3D viewport."""
-
-    bl_idname = "photara.preview_camera_positions"
-    bl_label = "Preview Camera Positions"
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context):
-        return context.scene is not None and context.scene.photara.capture_mode in {
-            "ORBIT", "BOX_GRID"
-        }
-
-    def execute(self, context):
-        props = context.scene.photara
-        source_camera = props.camera or context.scene.camera
-        if source_camera is None or source_camera.type != "CAMERA":
-            self.report({"ERROR"}, "请先选择一个透视相机")
-            return {"CANCELLED"}
-        if source_camera.data.type != "PERSP":
-            self.report({"ERROR"}, "点位预览需要透视相机")
-            return {"CANCELLED"}
-
-        generator = RenderJob(context)
-        try:
-            if props.capture_mode == "ORBIT":
-                if props.orbit_target is None:
-                    raise PhotaraExportError("请先选择 Target Object")
-                poses = generator._build_orbit_poses(props.orbit_target)
-            else:
-                if props.box_bounds_object is None:
-                    raise PhotaraExportError("请先选择 Room Bounds")
-                poses = generator._build_box_grid_poses(props.box_bounds_object)
-        except PhotaraExportError as error:
-            self.report({"ERROR"}, str(error))
-            return {"CANCELLED"}
-
-        if len(poses) > _MAX_PREVIEW_CAMERAS:
-            self.report(
-                {"ERROR"},
-                "预览点位上限为 {} 个；请减少网格数或拍摄张数".format(
-                    _MAX_PREVIEW_CAMERAS
-                ),
-            )
-            return {"CANCELLED"}
-
-        collection = _get_preview_collection(context.scene, create=True)
-        _clear_preview_objects(collection)
-        for index, pose in enumerate(poses, 1):
-            obj = bpy.data.objects.new(
-                "Photara Preview Camera {:04d}".format(index), source_camera.data
-            )
-            obj[_PREVIEW_OBJECT_TAG] = True
-            obj.matrix_world = pose
-            obj.hide_render = True
-            obj.show_in_front = True
-            collection.objects.link(obj)
-
-        message = "相机点位预览已生成：{} 个视点".format(len(poses))
-        props.status = message
-        self.report({"INFO"}, message)
-        return {"FINISHED"}
-
-
-class PHOTARA_OT_clear_camera_preview(bpy.types.Operator):
-    """Remove only the camera objects created by Photara's preview."""
-
-    bl_idname = "photara.clear_camera_preview"
-    bl_label = "Clear Preview"
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        collection = _get_preview_collection(context.scene)
-        removed = _clear_preview_objects(collection)
-        message = "已清除 {} 个相机预览点位".format(removed)
-        context.scene.photara.status = message
-        self.report({"INFO"}, message)
-        return {"FINISHED"}
 
 
 class PHOTARA_OT_export_poses(bpy.types.Operator):
