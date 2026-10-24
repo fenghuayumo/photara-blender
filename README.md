@@ -30,7 +30,7 @@ powershell -File pack.ps1
 ```
 
 Blender → Edit → Preferences → Add-ons → Install… 选择生成的
-`photara_render-1.0.1.zip`，然后启用 **Photara Render & Pose Export**。
+`photara_render-1.1.0.zip`，然后启用 **Photara Render & Pose Export**。
 
 ## 使用
 
@@ -40,7 +40,7 @@ Blender → Edit → Preferences → Add-ons → Install… 选择生成的
    - **Camera & Frames**：选择相机（留空用场景相机）和采集模式
      - **Camera Animation**：按场景范围或自定义帧范围采样已有相机动画
      - **Object 360° Orbit**：选择目标物体，设置总张数、垂直环绕层数、最低/最高仰角、物体尺寸倍数定义的球面半径和起始角；插件将张数分配到各仰角层，自动生成球面透视相机点位
-     - **Indoor Box Grid**：选择代表可拍摄室内范围的边界盒物体，设置 XYZ 点数、墙面/顶面边距、相机高度和每点的水平拍摄方向数；每个相机点生成 4/8/12 张透视图。Z Layers 大于 1 时会生成多层高度
+     - **Indoor Box Grid**：选择室内采集边界盒，默认启用 Automatic Coverage；生成多高度、上下全方向且有角度重叠的透视图，排除贴近几何和封闭家具内部的点位，并针对采样覆盖不足的表面自动补拍
    - **Photara Integration**：交付模式与可执行文件路径（留空自动探测）
 3. 点击 **Render & Export for Photara**。渲染完成后插件自动：
    - 读取 Agent Control 发现目录（`%APPDATA%\Photara\control\*.json`）
@@ -57,10 +57,37 @@ Blender → Edit → Preferences → Add-ons → Install… 选择生成的
 环绕只支持透视相机，输出的每张图像仍对应标准针孔内参，可直接导出 COLMAP 和
 `transforms.json`。
 
-Indoor Box Grid 同样使用临时透视相机。Room Bounds 应是包围可拍摄室内空间的简单边界物体；
-插件按其世界空间包围盒布点，应用各面边距，并在每个点按设置的方向数水平转向拍摄。
-单层点阵的高度从边界盒底部计算；多层点阵在上下边距之间均匀分布。此模式生成的是多张
-透视图，而非单张全景图，以保持现有 3DGS 位姿格式兼容。
+Indoor Box Grid 使用临时透视相机，所有图像固定在当前场景帧。Room Bounds 可选盒形 Mesh
+或 Cube Empty；支持旋转与缩放。辅助边界盒应启用 Bounds Is Helper，采集期间会临时隐藏并恢复；
+若选择实际房间壳体，关闭该选项。墙、家具和室内细节仍需保留渲染可见。
+
+### 室内覆盖采集流程
+
+1. 选择 Room Bounds、透视 Camera，并开启 Automatic Coverage。默认 3×3×3 层点阵、24mm 镜头，
+   相邻方向角度重叠 35%。采集相机包括朝上、朝下方向；原始相机镜头不会改变。单层时高度从盒底计算。
+2. 点击 Preview Camera Positions。规划以当前分辨率、像素比例和实际采集内参检查可见性：
+   先布置基础全方向视点，再针对覆盖不足的表面添加相机位置或朝向。界面可处理事件并可取消规划。
+3. 红色标记代表未观察到的表面样本，橙色表示独立观察位置不足。预览辅助对象不参与渲染。
+   Solid 视图的 Color Type 需为 Material 或 Object 才能显示颜色。模型或参数改动后重新生成预览。
+4. 每个样本默认要求 3 个独立相机位置，观察方向至少相差 5°，位置至少相距 Geometry Clearance。
+   同一点原地转动相机不会增加此计数。采样按范围内三角形表面积加权，统计不是逐像素保证。
+5. 调整 XYZ 点阵、Coverage Samples、Image Budget、范围和碰撞边距，直到覆盖达到要求。
+   Require Coverage Target 会在存在未达标样本时阻止渲染；预算不足不会悄悄截断基础点阵。
+6. Render & Export 会重新分析当前场景，渲染基础图像和补拍图像，导出内参、位姿和覆盖报告，
+   完成后按 After Render 设置交付 Studio 或 CLI。停止按钮在当前帧完成后结束序列；Esc 可中止当前帧。
+   中途结束保留已完成图像及其位姿，不启动训练。
+
+`capture_coverage.json` 包含完整/未见/不足样本数、采集帧数、预算、补拍数量、相机位置和逐样本
+观察数量，并区分规划覆盖和已完成图像覆盖。渲染成功后还会从被至少两个已导出位置看见的样本生成几何初始点云：COLMAP 的
+points3D.txt 和 JSON 的 initial_points.ply，避免仅用相机包围盒随机初始化。初始颜色为中性灰，
+最终外观由渲染图像训练。点云密度随 Coverage Samples 调整。
+
+覆盖分析把网格视为不透明几何，暂不模拟玻璃、镜面或体积材质；需使用一致的视口/渲染修改器级别。
+渲染可见但视口隐藏/排除的网格会阻止分析，需先启用视口可见性；分析和采集期间不要编辑场景。
+闭合房间壳体内部允许布点，独立封闭家具内部会排除；复杂自交/非流形模型可能需要修复或调整边界。
+完全封闭且没有有效相机能看到的内表面会继续显示缺口。角度重叠不能保证不同空间位置之间的图像
+重叠，小物体、狭窄遮挡区域需提高采样和点阵密度。覆盖达标表示采样几何满足设置，实际 3DGS
+效果还取决于纹理、光照、分辨率、训练参数和需要重建的可见空间。
 
 ## 输出目录结构
 
@@ -72,7 +99,9 @@ photara_dataset/
 ├── sparse/0/                  # COLMAP 文本模型（3DGS 训练主格式）
 │   ├── cameras.txt            # CAMERA_ID PINHOLE W H fx fy cx cy
 │   ├── images.txt             # IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME
-│   └── points3D.txt           # 空（合成数据无需 SfM 点）
+│   └── points3D.txt           # 室内多视点可见表面的初始点；其他模式可为空
+├── initial_points.ply         # 室内几何初始化（存在有效多视图样本时）
+├── capture_coverage.json      # 室内采样覆盖报告与未完成状态
 ├── transforms.json            # Nerfstudio/Blender 位姿（fl_x 风格）
 └── photara_dataset.json       # manifest
 ```
@@ -123,6 +152,8 @@ blender -b scene.blend --python-expr "import photara_render.api as p; p.render_a
 
 ```powershell
 python tests/test_camera_utils.py   # 相机数学往返、COLMAP/transforms.json 格式、参数解析
+python -m unittest discover -s tests -v
+blender -b --factory-startup --python-exit-code 1 --python tests/blender_indoor_capture.py
 ```
 
 ## 常见问题

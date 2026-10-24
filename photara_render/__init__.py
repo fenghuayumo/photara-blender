@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Photara Render & Pose Export",
     "author": "Photara Team",
-    "version": (1, 0, 7),
+    "version": (1, 1, 0),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar (N) > Photara",
     "description": "Render animation to image sequence, export per-frame camera poses "
@@ -18,19 +18,32 @@ if "bpy" in locals():
         "camera_utils",
         "colmap_export",
         "photara_bridge",
-        "render_ops",
+        "indoor_capture",
+        "capture_ops",
         "ui",
     )
     for _m in _modules:
         importlib.reload(globals()[_m])
+    # Keep the compatibility alias used by older scripts.
+    from . import capture_ops
+    render_ops = capture_ops
 else:
     try:
         import bpy  # noqa: F401
 
-        from . import props, camera_utils, colmap_export, photara_bridge, render_ops, ui
+        from . import props, camera_utils, colmap_export, photara_bridge, indoor_capture, ui
+        from . import capture_ops
+        render_ops = capture_ops
     except ImportError:
         # Outside Blender (unit tests): the pure modules still import fine.
         from . import camera_utils, colmap_export, photara_bridge
+
+
+# Older scripts importing photara_render.render_ops continue to use the current operators.
+if globals().get("capture_ops") is not None:
+    import sys
+
+    sys.modules[__name__ + ".render_ops"] = capture_ops
 
 
 def _classes():

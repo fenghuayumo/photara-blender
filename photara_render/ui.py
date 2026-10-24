@@ -47,6 +47,7 @@ class PHOTARA_PT_output(bpy.types.Panel):
         props = context.scene.photara
         layout = self.layout
         layout.use_property_split = True
+        layout.enabled = not props.is_rendering
         layout.use_property_decorate = False
 
         layout.prop(props, "output_root")
@@ -74,6 +75,7 @@ class PHOTARA_PT_frames(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
+        layout.enabled = not props.is_rendering
 
         layout.prop(props, "camera")
         layout.prop(props, "capture_mode")
@@ -89,6 +91,8 @@ class PHOTARA_PT_frames(bpy.types.Panel):
             layout.prop(props, "orbit_start_angle")
         elif props.capture_mode == "BOX_GRID":
             layout.prop(props, "box_bounds_object")
+            layout.prop(props, "box_bounds_helper")
+            layout.prop(props, "box_auto_capture")
             row = layout.row(align=True)
             row.prop(props, "box_grid_x")
             row.prop(props, "box_grid_y")
@@ -96,9 +100,24 @@ class PHOTARA_PT_frames(bpy.types.Panel):
             layout.prop(props, "box_margin")
             if props.box_grid_z == 1:
                 layout.prop(props, "box_camera_height")
-            layout.prop(props, "box_views_per_point")
+            if props.box_auto_capture:
+                layout.prop(props, "box_capture_lens")
+                layout.prop(props, "box_overlap")
+            layout.prop(props, "box_views_per_point",
+                        text="Min Azimuth Views" if props.box_auto_capture else "Views per Point")
             layout.prop(props, "box_start_angle")
-            layout.prop(props, "box_pitch")
+            if not props.box_auto_capture:
+                layout.prop(props, "box_pitch")
+            layout.prop(props, "box_clearance")
+            layout.prop(props, "box_surface_samples")
+            layout.prop(props, "box_min_observations")
+            layout.prop(props, "box_min_parallax")
+            layout.prop(props, "box_max_images")
+            layout.prop(props, "box_block_incomplete")
+            box = layout.box()
+            box.label(text=props.box_coverage_status, icon="INFO")
+            box.label(text="Red: unseen / Orange: insufficient")
+            box.label(text="Rebuild preview after scene/settings changes")
         else:
             layout.prop(props, "use_scene_frame_range")
             if not props.use_scene_frame_range:

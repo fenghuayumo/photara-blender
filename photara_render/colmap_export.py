@@ -19,6 +19,7 @@ def write_dataset(
     write_colmap=True,
     write_transforms=True,
     meta=None,
+    initial_points=None,
 ):
     """Write the dataset folder.
 
@@ -77,10 +78,22 @@ def write_dataset(
                     )
                 )
 
-        # 3DGS loaders commonly expect the file to exist; synthetic datasets ship
-        # an empty ground-truth point cloud (SfM will not be run).
-        open(os.path.join(sparse_dir, "points3D.txt"), "w", encoding="utf-8").close()
+        with open(os.path.join(sparse_dir, "points3D.txt"), "w", encoding="utf-8") as f:
+            f.write("# POINT3D_ID X Y Z R G B ERROR TRACK[]\n")
+            for point_id, point in enumerate(initial_points or [], 1):
+                f.write("{} {} {} {} {} {} {} 0\n".format(
+                    point_id, *(_fmt(v) for v in point["position"]), *point["color"]))
         written.append("sparse/0/*.txt")
+
+    if initial_points:
+        with open(os.path.join(dataset_dir, "initial_points.ply"), "w", encoding="ascii") as f:
+            f.write("ply\nformat ascii 1.0\nelement vertex {}\n".format(len(initial_points)))
+            f.write("property float x\nproperty float y\nproperty float z\n")
+            f.write("property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n")
+            for point in initial_points:
+                f.write("{} {} {} {} {} {}\n".format(
+                    *(_fmt(v) for v in point["position"]), *point["color"]))
+        written.append("initial_points.ply")
 
     if write_transforms:
         w, h = frames[0]["width"], frames[0]["height"]
@@ -105,6 +118,8 @@ def write_dataset(
             "dataset_name": name,
             "frames": [],
         }
+        if initial_points:
+            data["ply_file_path"] = "initial_points.ply"
         for i, fr in enumerate(frames, start=1):
             data["frames"].append(
                 {

@@ -11,11 +11,15 @@ from bpy.props import (
 
 
 def _poll_camera(self, obj):
-    return obj is not None and obj.type == "CAMERA"
+    return obj is not None and obj.type == "CAMERA" and not obj.get("photara_camera_preview")
 
 
 def _poll_mesh_or_object(self, obj):
     return obj is not None and obj.type in {"MESH", "CURVE", "SURFACE", "META", "FONT"}
+
+
+def _poll_bounds(self, obj):
+    return obj is not None and obj.type in {"MESH", "EMPTY"}
 
 
 class PhotaraProps(bpy.types.PropertyGroup):
@@ -156,11 +160,53 @@ class PhotaraProps(bpy.types.PropertyGroup):
         name="Room Bounds",
         description="代表室内可拍摄空间边界的盒体或辅助物体",
         type=bpy.types.Object,
-        poll=_poll_mesh_or_object,
+        poll=_poll_bounds,
     )
     box_grid_x: IntProperty(name="X Points", default=3, min=1, max=20)
     box_grid_y: IntProperty(name="Y Points", default=3, min=1, max=20)
-    box_grid_z: IntProperty(name="Z Layers", default=1, min=1, max=10)
+    box_grid_z: IntProperty(name="Z Layers", default=3, min=1, max=10)
+    box_bounds_helper: BoolProperty(
+        name="Bounds Is Helper", default=True,
+        description="边界物体仅为采集范围辅助盒；采集时临时隐藏，不包含在场景几何中",
+    )
+    box_auto_capture: BoolProperty(
+        name="Automatic Coverage", default=True,
+        description="按实际视场角生成重叠的上下全方向视角，检查遮挡并自动补充视点",
+    )
+    box_capture_lens: FloatProperty(
+        name="Capture Lens (mm)", default=24.0, min=8.0, max=100.0,
+        description="自动采集使用的透视焦距；仅修改临时采集相机",
+    )
+    box_overlap: FloatProperty(
+        name="Angular Overlap", default=0.35, min=0.1, max=0.8, subtype="FACTOR",
+        description="同一位置相邻拍摄方向的角度重叠率；空间重叠还取决于点间距与遮挡",
+    )
+    box_clearance: FloatProperty(
+        name="Geometry Clearance", default=0.2, min=0.01, max=10.0, subtype="DISTANCE",
+        description="相机与场景表面的最小距离；闭合家具内部点位会被排除",
+    )
+    box_surface_samples: IntProperty(
+        name="Coverage Samples", default=1200, min=100, max=10000,
+        description="按三角形面积抽样的表面检查点数量；增加采样可检测较小盲区",
+    )
+    box_min_observations: IntProperty(
+        name="Required Positions", default=3, min=2, max=8,
+        description="每个表面样本需要被多少个不同且有视差的相机位置看见",
+    )
+    box_min_parallax: FloatProperty(
+        name="Min Parallax", default=0.0872664626, min=0.0087266463,
+        max=0.7853981634, subtype="ANGLE",
+        description="多视角观察方向间的最小夹角；同一点转动相机不算新增观察位置",
+    )
+    box_max_images: IntProperty(
+        name="Image Budget", default=4000, min=50, max=10000,
+        description="基础采集和自动补拍的总帧数上限；预算不足的区域会在报告中标出",
+    )
+    box_block_incomplete: BoolProperty(
+        name="Require Coverage Target", default=False,
+        description="启用后，存在采样盲区时阻止渲染和训练；先预览检查并调整范围、点阵和预算",
+    )
+    box_coverage_status: StringProperty(name="Coverage", default="尚未分析")
     box_margin: FloatProperty(
         name="Wall / Ceiling Margin",
         description="点阵与边界盒各面的最小距离（Blender 世界单位）",
