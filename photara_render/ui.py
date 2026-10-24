@@ -81,7 +81,9 @@ class PHOTARA_PT_frames(bpy.types.Panel):
             layout.prop(props, "orbit_target")
             layout.prop(props, "orbit_shots")
             layout.prop(props, "orbit_radius_factor")
-            layout.prop(props, "orbit_height")
+            layout.prop(props, "orbit_levels")
+            layout.prop(props, "orbit_elevation_min")
+            layout.prop(props, "orbit_elevation_max")
             layout.prop(props, "orbit_start_angle")
         elif props.capture_mode == "BOX_GRID":
             layout.prop(props, "box_bounds_object")

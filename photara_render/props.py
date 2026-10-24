@@ -98,8 +98,8 @@ class PhotaraProps(bpy.types.PropertyGroup):
         poll=_poll_mesh_or_object,
     )
     orbit_shots: IntProperty(
-        name="Shots",
-        description="环绕一周的拍摄张数（不重复拍摄起点）",
+        name="Total Shots",
+        description="所有仰角层合计的图像张数，插件会尽量均匀分配到各层",
         default=36,
         min=4,
         max=360,
@@ -111,13 +111,28 @@ class PhotaraProps(bpy.types.PropertyGroup):
         min=0.25,
         max=20.0,
     )
-    orbit_height: FloatProperty(
-        name="Height Offset",
-        description="相机轨道相对于目标中心的垂直偏移（Blender 世界单位）",
-        default=0.0,
-        min=-1000.0,
-        max=1000.0,
-        subtype="DISTANCE",
+    orbit_levels: IntProperty(
+        name="Elevation Rings",
+        description="球面轨道的垂直层数",
+        default=3,
+        min=1,
+        max=12,
+    )
+    orbit_elevation_min: FloatProperty(
+        name="Min Elevation",
+        description="最低一层相对水平面的仰角；负值从物体下方拍摄",
+        default=-0.5235987756,
+        min=-1.3962634016,
+        max=1.3962634016,
+        subtype="ANGLE",
+    )
+    orbit_elevation_max: FloatProperty(
+        name="Max Elevation",
+        description="最高一层相对水平面的仰角；正值从物体上方拍摄",
+        default=1.0471975512,
+        min=-1.3962634016,
+        max=1.3962634016,
+        subtype="ANGLE",
     )
     orbit_start_angle: FloatProperty(
         name="Start Angle",

@@ -74,7 +74,8 @@ class RenderJob:
                 raise PhotaraExportError("360° 环绕模式需要选择目标物体")
             if target == camera:
                 raise PhotaraExportError("目标物体不能是拍摄相机")
-            self.frames = list(range(1, int(props.orbit_shots) + 1))
+            self._generated_poses = self._build_orbit_poses(target)
+            self.frames = list(range(1, len(self._generated_poses) + 1))
         elif props.capture_mode == "BOX_GRID":
             bounds_object = props.box_bounds_object
             if bounds_object is None:
@@ -149,6 +150,10 @@ class RenderJob:
 
     def _prepare_orbit_camera(self, source_camera, target):
         """Create a temporary, unanimated camera using the selected camera's optics."""
+        self._create_generated_camera(source_camera, "Photara Orbit Camera")
+
+    def _build_orbit_poses(self, target):
+        props = self.props
         deps = bpy.context.evaluated_depsgraph_get()
         target_eval = target.evaluated_get(deps)
         corners = [target_eval.matrix_world @ Vector(corner) for corner in target_eval.bound_box]
@@ -163,10 +168,42 @@ class RenderJob:
             size = max(target_eval.dimensions)
         if size <= 1e-6:
             size = 1.0
-        self._orbit_target_center = center
-        self._orbit_radius = size * float(self.props.orbit_radius_factor)
+        radius = size * float(props.orbit_radius_factor)
+        levels = int(props.orbit_levels)
+        total_shots = int(props.orbit_shots)
+        if total_shots < levels:
+            raise PhotaraExportError("Total Shots 不能少于 Elevation Rings")
+        elevation_min = float(props.orbit_elevation_min)
+        elevation_max = float(props.orbit_elevation_max)
+        if levels > 1 and elevation_max <= elevation_min:
+            raise PhotaraExportError("多层球面环绕要求 Max Elevation 大于 Min Elevation")
+        if levels == 1:
+            elevations = [min(max(0.0, elevation_min), elevation_max)]
+        else:
+            elevations = [
+                elevation_min + (elevation_max - elevation_min) * ring / (levels - 1)
+                for ring in range(levels)
+            ]
 
-        self._create_generated_camera(source_camera, "Photara Orbit Camera")
+        base_shots, extra_shots = divmod(total_shots, levels)
+        start_angle = float(props.orbit_start_angle)
+        poses = []
+        for ring, elevation in enumerate(elevations):
+            ring_shots = base_shots + (1 if ring < extra_shots else 0)
+            stagger = math.pi / ring_shots if ring % 2 else 0.0
+            for shot in range(ring_shots):
+                azimuth = start_angle + stagger + 2.0 * math.pi * shot / ring_shots
+                position = Vector((
+                    center.x + radius * math.cos(elevation) * math.cos(azimuth),
+                    center.y + radius * math.cos(elevation) * math.sin(azimuth),
+                    center.z + radius * math.sin(elevation),
+                ))
+                matrix = (center - position).to_track_quat("-Z", "Y").to_matrix().to_4x4()
+                matrix.translation = position
+                poses.append(matrix)
+        self._orbit_target_center = center
+        self._orbit_radius = radius
+        return poses
 
     def _create_generated_camera(self, source_camera, name):
         camera = source_camera.copy()
@@ -237,18 +274,7 @@ class RenderJob:
         return poses
 
     def _orbit_matrix(self, shot_index):
-        props = self.props
-        angle = float(props.orbit_start_angle) + 2.0 * math.pi * shot_index / len(self.frames)
-        center = self._orbit_target_center
-        position = Vector((
-            center.x + self._orbit_radius * math.cos(angle),
-            center.y + self._orbit_radius * math.sin(angle),
-            center.z + float(props.orbit_height),
-        ))
-        rotation = (center - position).to_track_quat("-Z", "Y")
-        matrix = rotation.to_matrix().to_4x4()
-        matrix.translation = position
-        return matrix
+        return self._generated_poses[shot_index]
 
     def _cleanup_old_frames(self):
         """Remove only our own frame_XXXXXXXX files inside the images dir."""
@@ -403,7 +429,11 @@ class RenderJob:
                 "image_format": props.image_format,
                 "capture_mode": props.capture_mode,
                 **({"orbit_target": props.orbit_target.name,
-                    "orbit_source_frame": int(self._original_frame)}
+                    "orbit_source_frame": int(self._original_frame),
+                    "orbit_levels": props.orbit_levels,
+                    "orbit_elevation_range": [
+                        float(props.orbit_elevation_min), float(props.orbit_elevation_max)
+                    ]}
                    if props.capture_mode == "ORBIT" else {}),
                 **({"room_bounds": props.box_bounds_object.name,
                     "box_grid": [props.box_grid_x, props.box_grid_y, props.box_grid_z],
@@ -502,27 +532,9 @@ def _record_poses_blocking(context):
     if props.capture_mode == "ORBIT":
         if props.orbit_target is None:
             raise PhotaraExportError("360° 环绕模式需要选择目标物体")
-        deps = context.evaluated_depsgraph_get()
-        target_eval = props.orbit_target.evaluated_get(deps)
-        corners = [target_eval.matrix_world @ Vector(corner) for corner in target_eval.bound_box]
-        center = sum(corners, Vector((0.0, 0.0, 0.0))) / len(corners)
-        size = max(
-            max(point[i] for point in corners) - min(point[i] for point in corners)
-            for i in range(3)
-        )
-        radius = max(size, 1e-6) * float(props.orbit_radius_factor)
-        frames = list(range(1, int(props.orbit_shots) + 1))
-        generated_poses = []
-        for i in range(len(frames)):
-            angle = float(props.orbit_start_angle) + 2.0 * math.pi * i / len(frames)
-            position = Vector((
-                center.x + radius * math.cos(angle),
-                center.y + radius * math.sin(angle),
-                center.z + float(props.orbit_height),
-            ))
-            matrix = (center - position).to_track_quat("-Z", "Y").to_matrix().to_4x4()
-            matrix.translation = position
-            generated_poses.append(matrix)
+        generator = RenderJob(context)
+        generated_poses = generator._build_orbit_poses(props.orbit_target)
+        frames = list(range(1, len(generated_poses) + 1))
     elif props.capture_mode == "BOX_GRID":
         if props.box_bounds_object is None:
             raise PhotaraExportError("室内 Box 点阵模式需要选择 Room Bounds 边界物体")
@@ -597,7 +609,11 @@ def _record_poses_blocking(context):
             "image_format": props.image_format,
             "capture_mode": props.capture_mode,
             **({"orbit_target": props.orbit_target.name,
-                "orbit_source_frame": int(original_frame)}
+                "orbit_source_frame": int(original_frame),
+                "orbit_levels": props.orbit_levels,
+                "orbit_elevation_range": [
+                    float(props.orbit_elevation_min), float(props.orbit_elevation_max)
+                ]}
                if props.capture_mode == "ORBIT" else {}),
             **({"room_bounds": props.box_bounds_object.name,
                 "box_grid": [props.box_grid_x, props.box_grid_y, props.box_grid_z],
