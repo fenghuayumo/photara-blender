@@ -87,6 +87,7 @@ class PhotaraProps(bpy.types.PropertyGroup):
         items=(
             ("ANIMATION", "Camera Animation", "按场景帧范围渲染已有相机动画", 0),
             ("ORBIT", "Object 360° Orbit", "围绕目标物体自动生成相机点位", 1),
+            ("BOX_GRID", "Indoor Box Grid", "在边界盒内生成相机点阵并多方向拍摄", 2),
         ),
         default="ANIMATION",
     )
@@ -124,6 +125,57 @@ class PhotaraProps(bpy.types.PropertyGroup):
         default=0.0,
         min=-6.28318530718,
         max=6.28318530718,
+        subtype="ANGLE",
+    )
+    box_bounds_object: PointerProperty(
+        name="Room Bounds",
+        description="代表室内可拍摄空间边界的盒体或辅助物体",
+        type=bpy.types.Object,
+        poll=_poll_mesh_or_object,
+    )
+    box_grid_x: IntProperty(name="X Points", default=3, min=1, max=20)
+    box_grid_y: IntProperty(name="Y Points", default=3, min=1, max=20)
+    box_grid_z: IntProperty(name="Z Layers", default=1, min=1, max=10)
+    box_margin: FloatProperty(
+        name="Wall / Ceiling Margin",
+        description="点阵与边界盒各面的最小距离（Blender 世界单位）",
+        default=0.3,
+        min=0.0,
+        max=100.0,
+        subtype="DISTANCE",
+    )
+    box_camera_height: FloatProperty(
+        name="Camera Height",
+        description="单层点阵时相机离边界盒底部的高度；多层时由 Z Layers 均匀分布",
+        default=1.5,
+        min=0.1,
+        max=100.0,
+        subtype="DISTANCE",
+    )
+    box_views_per_point: EnumProperty(
+        name="Views per Point",
+        description="每个点位水平环拍的透视视角数量",
+        items=(
+            ("4", "4 Directions", "每 90° 一张", 0),
+            ("8", "8 Directions", "每 45° 一张，覆盖更密", 1),
+            ("12", "12 Directions", "每 30° 一张，覆盖最密", 2),
+        ),
+        default="4",
+    )
+    box_start_angle: FloatProperty(
+        name="Start Angle",
+        description="点位环拍的起始朝向",
+        default=0.0,
+        min=-6.28318530718,
+        max=6.28318530718,
+        subtype="ANGLE",
+    )
+    box_pitch: FloatProperty(
+        name="Pitch",
+        description="所有方向统一向上或向下倾斜的角度；负值朝下",
+        default=-0.0872664626,
+        min=-1.0471975512,
+        max=1.0471975512,
         subtype="ANGLE",
     )
 

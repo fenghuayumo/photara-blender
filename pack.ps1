@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pkg = Join-Path $root "photara_render"
-$dest = Join-Path $root "photara_render-1.0.2.zip"
+$dest = Join-Path $root "photara_render-1.0.3.zip"
 
 if (-not (Test-Path $pkg)) { throw "missing $pkg" }
 if (Test-Path $dest) { Remove-Item -LiteralPath $dest -Force }

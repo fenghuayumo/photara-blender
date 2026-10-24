@@ -49,6 +49,7 @@ class RenderJob:
         self._orbit_camera = None
         self._orbit_target_center = None
         self._orbit_radius = 0.0
+        self._generated_poses = []
 
     # ------------------------------------------------------------------ prepare
     def prepare(self):
@@ -72,6 +73,14 @@ class RenderJob:
             if target == camera:
                 raise PhotaraExportError("目标物体不能是拍摄相机")
             self.frames = list(range(1, int(props.orbit_shots) + 1))
+        elif props.capture_mode == "BOX_GRID":
+            bounds_object = props.box_bounds_object
+            if bounds_object is None:
+                raise PhotaraExportError("室内 Box 点阵模式需要选择 Room Bounds 边界物体")
+            if bounds_object == camera:
+                raise PhotaraExportError("Room Bounds 不能是拍摄相机")
+            self._generated_poses = self._build_box_grid_poses(bounds_object)
+            self.frames = list(range(1, len(self._generated_poses) + 1))
         else:
             if props.use_scene_frame_range:
                 start, end = scene.frame_start, scene.frame_end
@@ -116,6 +125,8 @@ class RenderJob:
         self._original_camera = scene.camera
         if props.capture_mode == "ORBIT":
             self._prepare_orbit_camera(camera, props.orbit_target)
+        elif props.capture_mode == "BOX_GRID":
+            self._create_generated_camera(camera, "Photara Box Grid Camera")
 
         fmt = props.image_format
         img.file_format = fmt
@@ -126,7 +137,7 @@ class RenderJob:
         render.use_file_extension = False
         if props.force_opaque:
             render.film_transparent = False
-        if props.capture_mode != "ORBIT" and props.camera and props.camera != scene.camera:
+        if props.capture_mode == "ANIMATION" and props.camera and props.camera != scene.camera:
             scene.camera = props.camera
 
         self._prepared = True
@@ -153,18 +164,75 @@ class RenderJob:
         self._orbit_target_center = center
         self._orbit_radius = size * float(self.props.orbit_radius_factor)
 
-        orbit_camera = source_camera.copy()
-        orbit_camera.data = source_camera.data.copy()
-        orbit_camera.name = "Photara Orbit Camera"
-        orbit_camera.parent = None
-        orbit_camera.animation_data_clear()
-        for constraint in list(orbit_camera.constraints):
-            orbit_camera.constraints.remove(constraint)
-        self.scene.collection.objects.link(orbit_camera)
-        orbit_camera.matrix_world = source_camera.matrix_world.copy()
-        self._orbit_camera = orbit_camera
-        self.camera = orbit_camera
-        self.scene.camera = orbit_camera
+        self._create_generated_camera(source_camera, "Photara Orbit Camera")
+
+    def _create_generated_camera(self, source_camera, name):
+        camera = source_camera.copy()
+        camera.data = source_camera.data.copy()
+        camera.name = name
+        camera.parent = None
+        camera.animation_data_clear()
+        for constraint in list(camera.constraints):
+            camera.constraints.remove(constraint)
+        self.scene.collection.objects.link(camera)
+        camera.matrix_world = source_camera.matrix_world.copy()
+        self._orbit_camera = camera
+        self.camera = camera
+        self.scene.camera = camera
+
+    def _build_box_grid_poses(self, bounds_object):
+        props = self.props
+        deps = bpy.context.evaluated_depsgraph_get()
+        bounds_eval = bounds_object.evaluated_get(deps)
+        corners = [bounds_eval.matrix_world @ Vector(corner) for corner in bounds_eval.bound_box]
+        if not corners:
+            raise PhotaraExportError("Room Bounds 没有有效的边界盒")
+        low = Vector(tuple(min(point[i] for point in corners) for i in range(3)))
+        high = Vector(tuple(max(point[i] for point in corners) for i in range(3)))
+        margin = float(props.box_margin)
+        if any(high[i] - low[i] <= 2.0 * margin for i in range(3)):
+            raise PhotaraExportError("Room Bounds 太小：边界盒尺寸必须大于两倍边距")
+
+        def samples(axis, count):
+            minimum = low[axis] + margin
+            maximum = high[axis] - margin
+            if count == 1:
+                return [(minimum + maximum) * 0.5]
+            return [minimum + (maximum - minimum) * i / (count - 1) for i in range(count)]
+
+        xs = samples(0, int(props.box_grid_x))
+        ys = samples(1, int(props.box_grid_y))
+        if props.box_grid_z == 1:
+            z = low.z + float(props.box_camera_height)
+            if z < low.z + margin or z > high.z - margin:
+                raise PhotaraExportError("Camera Height 必须位于上下边距范围内")
+            zs = [z]
+        else:
+            zs = samples(2, int(props.box_grid_z))
+
+        views = int(props.box_views_per_point)
+        total = len(xs) * len(ys) * len(zs) * views
+        if total > 5000:
+            raise PhotaraExportError("点阵将生成 {} 张图像；请减少网格数或每点方向数（上限 5000）".format(total))
+
+        poses = []
+        start_angle = float(props.box_start_angle)
+        pitch = float(props.box_pitch)
+        for z in zs:
+            for y in ys:
+                for x in xs:
+                    position = Vector((x, y, z))
+                    for view in range(views):
+                        yaw = start_angle + 2.0 * math.pi * view / views
+                        direction = Vector((
+                            math.cos(yaw) * math.cos(pitch),
+                            math.sin(yaw) * math.cos(pitch),
+                            math.sin(pitch),
+                        ))
+                        matrix = direction.to_track_quat("-Z", "Y").to_matrix().to_4x4()
+                        matrix.translation = position
+                        poses.append(matrix)
+        return poses
 
     def _orbit_matrix(self, shot_index):
         props = self.props
@@ -207,6 +275,10 @@ class RenderJob:
         frame = self.frames[self._index]
         if props.capture_mode == "ORBIT":
             self.camera.matrix_world = self._orbit_matrix(self._index)
+            scene.frame_set(int(self._original_frame), subframe=self._original_frame - int(self._original_frame))
+            bpy.context.view_layer.update()
+        elif props.capture_mode == "BOX_GRID":
+            self.camera.matrix_world = self._generated_poses[self._index]
             scene.frame_set(int(self._original_frame), subframe=self._original_frame - int(self._original_frame))
             bpy.context.view_layer.update()
         else:
@@ -269,7 +341,7 @@ class RenderJob:
                 "blender_version": bpy.app.version_string,
                 "frame_range": (
                     [self.frames[0], self.frames[-1], 1]
-                    if props.capture_mode == "ORBIT"
+                    if props.capture_mode in ("ORBIT", "BOX_GRID")
                     else [self.frames[0], self.frames[-1], props.frame_step]
                 ),
                 "image_format": props.image_format,
@@ -277,6 +349,11 @@ class RenderJob:
                 **({"orbit_target": props.orbit_target.name,
                     "orbit_source_frame": int(self._original_frame)}
                    if props.capture_mode == "ORBIT" else {}),
+                **({"room_bounds": props.box_bounds_object.name,
+                    "box_grid": [props.box_grid_x, props.box_grid_y, props.box_grid_z],
+                    "views_per_point": int(props.box_views_per_point),
+                    "box_source_frame": int(self._original_frame)}
+                   if props.capture_mode == "BOX_GRID" else {}),
             },
         )
         self._exported = True
@@ -363,11 +440,10 @@ def _record_poses_blocking(context):
     if camera.data.type != "PERSP":
         raise PhotaraExportError("相机必须是透视相机")
 
-    orbit = props.capture_mode == "ORBIT"
-    if orbit:
+    generated_poses = None
+    if props.capture_mode == "ORBIT":
         if props.orbit_target is None:
             raise PhotaraExportError("360° 环绕模式需要选择目标物体")
-        frames = list(range(1, int(props.orbit_shots) + 1))
         deps = context.evaluated_depsgraph_get()
         target_eval = props.orbit_target.evaluated_get(deps)
         corners = [target_eval.matrix_world @ Vector(corner) for corner in target_eval.bound_box]
@@ -377,6 +453,24 @@ def _record_poses_blocking(context):
             for i in range(3)
         )
         radius = max(size, 1e-6) * float(props.orbit_radius_factor)
+        frames = list(range(1, int(props.orbit_shots) + 1))
+        generated_poses = []
+        for i in range(len(frames)):
+            angle = float(props.orbit_start_angle) + 2.0 * math.pi * i / len(frames)
+            position = Vector((
+                center.x + radius * math.cos(angle),
+                center.y + radius * math.sin(angle),
+                center.z + float(props.orbit_height),
+            ))
+            matrix = (center - position).to_track_quat("-Z", "Y").to_matrix().to_4x4()
+            matrix.translation = position
+            generated_poses.append(matrix)
+    elif props.capture_mode == "BOX_GRID":
+        if props.box_bounds_object is None:
+            raise PhotaraExportError("室内 Box 点阵模式需要选择 Room Bounds 边界物体")
+        generator = RenderJob(context)
+        generated_poses = generator._build_box_grid_poses(props.box_bounds_object)
+        frames = list(range(1, len(generated_poses) + 1))
     else:
         if props.use_scene_frame_range:
             start, end = scene.frame_start, scene.frame_end
@@ -398,22 +492,15 @@ def _record_poses_blocking(context):
     records = []
     intr = None
     for shot_index, frame in enumerate(frames):
-        if not orbit:
+        if generated_poses is None:
             scene.frame_set(frame, subframe=0.0)
         deps = context.evaluated_depsgraph_get()
         cam_eval = camera.evaluated_get(deps)
-        if orbit:
-            angle = float(props.orbit_start_angle) + 2.0 * math.pi * shot_index / len(frames)
-            position = Vector((
-                center.x + radius * math.cos(angle),
-                center.y + radius * math.sin(angle),
-                center.z + float(props.orbit_height),
-            ))
-            rigid_pose = (center - position).to_track_quat("-Z", "Y").to_matrix().to_4x4()
-            rigid_pose.translation = position
-        else:
+        if generated_poses is None:
             rigid_pose = cam_eval.matrix_world.to_quaternion().to_matrix().to_4x4()
             rigid_pose.translation = cam_eval.matrix_world.translation
+        else:
+            rigid_pose = generated_poses[shot_index]
         records.append(
             {
                 "filename": "frame_{:08d}{}".format(frame, ext),
@@ -429,7 +516,7 @@ def _record_poses_blocking(context):
         records[-1]["intrinsics"] = current_intrinsics
         if intr is None:
             intr = current_intrinsics
-    if not orbit:
+    if generated_poses is None:
         frame = original_frame
         scene.frame_set(int(frame), subframe=frame - int(frame))
 
@@ -448,9 +535,17 @@ def _record_poses_blocking(context):
         write_transforms=props.export_transforms_json,
         meta={
             "blender_version": bpy.app.version_string,
-            "frame_range": [frames[0], frames[-1], 1 if orbit else props.frame_step],
+            "frame_range": [frames[0], frames[-1], 1 if generated_poses is not None else props.frame_step],
             "image_format": props.image_format,
             "capture_mode": props.capture_mode,
+            **({"orbit_target": props.orbit_target.name,
+                "orbit_source_frame": int(original_frame)}
+               if props.capture_mode == "ORBIT" else {}),
+            **({"room_bounds": props.box_bounds_object.name,
+                "box_grid": [props.box_grid_x, props.box_grid_y, props.box_grid_z],
+                "views_per_point": int(props.box_views_per_point),
+                "box_source_frame": int(original_frame)}
+               if props.capture_mode == "BOX_GRID" else {}),
         },
     )
     return records, dataset_dir, missing

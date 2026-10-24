@@ -40,6 +40,7 @@ Blender → Edit → Preferences → Add-ons → Install… 选择生成的
    - **Camera & Frames**：选择相机（留空用场景相机）和采集模式
      - **Camera Animation**：按场景范围或自定义帧范围采样已有相机动画
      - **Object 360° Orbit**：选择目标物体，设置拍摄张数、物体尺寸倍数定义的环绕半径、相对物体中心的高度偏移和起始角；插件自动计算目标包围盒中心并生成一整圈透视相机点位，不需要手工制作关键帧
+     - **Indoor Box Grid**：选择代表可拍摄室内范围的边界盒物体，设置 XYZ 点数、墙面/顶面边距、相机高度和每点的水平拍摄方向数；每个相机点生成 4/8/12 张透视图。Z Layers 大于 1 时会生成多层高度
    - **Photara Integration**：交付模式与可执行文件路径（留空自动探测）
 3. 点击 **Render & Export for Photara**。渲染完成后插件自动：
    - 读取 Agent Control 发现目录（`%APPDATA%\Photara\control\*.json`）
@@ -54,6 +55,11 @@ Blender → Edit → Preferences → Add-ons → Install… 选择生成的
 目标中心按当前场景帧求值。渲染结束或取消后会恢复场景相机并移除临时相机。
 环绕只支持透视相机，输出的每张图像仍对应标准针孔内参，可直接导出 COLMAP 和
 `transforms.json`。
+
+Indoor Box Grid 同样使用临时透视相机。Room Bounds 应是包围可拍摄室内空间的简单边界物体；
+插件按其世界空间包围盒布点，应用各面边距，并在每个点按设置的方向数水平转向拍摄。
+单层点阵的高度从边界盒底部计算；多层点阵在上下边距之间均匀分布。此模式生成的是多张
+透视图，而非单张全景图，以保持现有 3DGS 位姿格式兼容。
 
 ## 输出目录结构
 

@@ -79,6 +79,18 @@ class PHOTARA_PT_frames(bpy.types.Panel):
             layout.prop(props, "orbit_radius_factor")
             layout.prop(props, "orbit_height")
             layout.prop(props, "orbit_start_angle")
+        elif props.capture_mode == "BOX_GRID":
+            layout.prop(props, "box_bounds_object")
+            row = layout.row(align=True)
+            row.prop(props, "box_grid_x")
+            row.prop(props, "box_grid_y")
+            row.prop(props, "box_grid_z")
+            layout.prop(props, "box_margin")
+            if props.box_grid_z == 1:
+                layout.prop(props, "box_camera_height")
+            layout.prop(props, "box_views_per_point")
+            layout.prop(props, "box_start_angle")
+            layout.prop(props, "box_pitch")
         else:
             layout.prop(props, "use_scene_frame_range")
             if not props.use_scene_frame_range:

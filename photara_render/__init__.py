@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Photara Render & Pose Export",
     "author": "Photara Team",
-    "version": (1, 0, 2),
+    "version": (1, 0, 3),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar (N) > Photara",
     "description": "Render animation to image sequence, export per-frame camera poses "
