@@ -37,7 +37,9 @@ Blender → Edit → Preferences → Add-ons → Install… 选择生成的
 1. 打开侧边栏：View3D → N 面板 → **Photara**
 2. 设置：
    - **Output Root**：数据集输出目录（默认 `//photara_dataset`，即 blend 文件旁）
-   - **Camera & Frames**：选择相机（留空用场景相机）、帧范围（支持场景范围/自定义/步长）
+   - **Camera & Frames**：选择相机（留空用场景相机）和采集模式
+     - **Camera Animation**：按场景范围或自定义帧范围采样已有相机动画
+     - **Object 360° Orbit**：选择目标物体，设置拍摄张数、物体尺寸倍数定义的环绕半径、相对物体中心的高度偏移和起始角；插件自动计算目标包围盒中心并生成一整圈透视相机点位，不需要手工制作关键帧
    - **Photara Integration**：交付模式与可执行文件路径（留空自动探测）
 3. 点击 **Render & Export for Photara**。渲染完成后插件自动：
    - 读取 Agent Control 发现目录（`%APPDATA%\Photara\control\*.json`）
@@ -47,6 +49,11 @@ Blender → Edit → Preferences → Add-ons → Install… 选择生成的
 > Studio 需要 `--enable-agent-control` 启动才会暴露控制接口；
 > AUTO 模式由插件自动带上该参数。若 Studio 在运行但未开启控制接口，
 > 插件会提示而不是盲目启动第二个实例。
+
+360° 环绕使用所选相机作为镜头参数模板，并在渲染期间创建临时相机；
+目标中心按当前场景帧求值。渲染结束或取消后会恢复场景相机并移除临时相机。
+环绕只支持透视相机，输出的每张图像仍对应标准针孔内参，可直接导出 COLMAP 和
+`transforms.json`。
 
 ## 输出目录结构
 

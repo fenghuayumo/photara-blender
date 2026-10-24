@@ -2,8 +2,10 @@
 
 import os
 import re
+import math
 
 import bpy
+from mathutils import Vector
 
 from . import camera_utils, colmap_export, photara_bridge
 
@@ -44,6 +46,9 @@ class RenderJob:
         self._originals = {}
         self._original_frame = 0.0
         self._original_camera = None
+        self._orbit_camera = None
+        self._orbit_target_center = None
+        self._orbit_radius = 0.0
 
     # ------------------------------------------------------------------ prepare
     def prepare(self):
@@ -60,13 +65,21 @@ class RenderJob:
                 "相机必须是透视相机（当前：{}），正交/全景相机不适用于 3DGS 重建".format(cam_type)
             )
 
-        if props.use_scene_frame_range:
-            start, end = scene.frame_start, scene.frame_end
+        if props.capture_mode == "ORBIT":
+            target = props.orbit_target
+            if target is None:
+                raise PhotaraExportError("360° 环绕模式需要选择目标物体")
+            if target == camera:
+                raise PhotaraExportError("目标物体不能是拍摄相机")
+            self.frames = list(range(1, int(props.orbit_shots) + 1))
         else:
-            start, end = props.frame_start, props.frame_end
-        if end < start:
-            raise PhotaraExportError("帧范围无效：结束帧 {} 小于起始帧 {}".format(end, start))
-        self.frames = list(range(int(start), int(end) + 1, max(1, int(props.frame_step))))
+            if props.use_scene_frame_range:
+                start, end = scene.frame_start, scene.frame_end
+            else:
+                start, end = props.frame_start, props.frame_end
+            if end < start:
+                raise PhotaraExportError("帧范围无效：结束帧 {} 小于起始帧 {}".format(end, start))
+            self.frames = list(range(int(start), int(end) + 1, max(1, int(props.frame_step))))
         if not self.frames:
             raise PhotaraExportError("帧范围为空")
 
@@ -101,6 +114,8 @@ class RenderJob:
         }
         self._original_frame = float(scene.frame_current)
         self._original_camera = scene.camera
+        if props.capture_mode == "ORBIT":
+            self._prepare_orbit_camera(camera, props.orbit_target)
 
         fmt = props.image_format
         img.file_format = fmt
@@ -111,13 +126,59 @@ class RenderJob:
         render.use_file_extension = False
         if props.force_opaque:
             render.film_transparent = False
-        if props.camera and props.camera != scene.camera:
+        if props.capture_mode != "ORBIT" and props.camera and props.camera != scene.camera:
             scene.camera = props.camera
 
         self._prepared = True
         self._index = 0
         props.progress = 0.0
         props.status = "准备渲染：{} 帧 → {}".format(len(self.frames), self.dataset_dir)
+
+    def _prepare_orbit_camera(self, source_camera, target):
+        """Create a temporary, unanimated camera using the selected camera's optics."""
+        deps = bpy.context.evaluated_depsgraph_get()
+        target_eval = target.evaluated_get(deps)
+        corners = [target_eval.matrix_world @ Vector(corner) for corner in target_eval.bound_box]
+        if corners:
+            center = sum(corners, Vector((0.0, 0.0, 0.0))) / len(corners)
+            size = max(
+                max(point[i] for point in corners) - min(point[i] for point in corners)
+                for i in range(3)
+            )
+        else:
+            center = target_eval.matrix_world.translation.copy()
+            size = max(target_eval.dimensions)
+        if size <= 1e-6:
+            size = 1.0
+        self._orbit_target_center = center
+        self._orbit_radius = size * float(self.props.orbit_radius_factor)
+
+        orbit_camera = source_camera.copy()
+        orbit_camera.data = source_camera.data.copy()
+        orbit_camera.name = "Photara Orbit Camera"
+        orbit_camera.parent = None
+        orbit_camera.animation_data_clear()
+        for constraint in list(orbit_camera.constraints):
+            orbit_camera.constraints.remove(constraint)
+        self.scene.collection.objects.link(orbit_camera)
+        orbit_camera.matrix_world = source_camera.matrix_world.copy()
+        self._orbit_camera = orbit_camera
+        self.camera = orbit_camera
+        self.scene.camera = orbit_camera
+
+    def _orbit_matrix(self, shot_index):
+        props = self.props
+        angle = float(props.orbit_start_angle) + 2.0 * math.pi * shot_index / len(self.frames)
+        center = self._orbit_target_center
+        position = Vector((
+            center.x + self._orbit_radius * math.cos(angle),
+            center.y + self._orbit_radius * math.sin(angle),
+            center.z + float(props.orbit_height),
+        ))
+        rotation = (center - position).to_track_quat("-Z", "Y")
+        matrix = rotation.to_matrix().to_4x4()
+        matrix.translation = position
+        return matrix
 
     def _cleanup_old_frames(self):
         """Remove only our own frame_XXXXXXXX files inside the images dir."""
@@ -144,7 +205,12 @@ class RenderJob:
         props = self.props
         scene = self.scene
         frame = self.frames[self._index]
-        scene.frame_set(frame, subframe=0.0)
+        if props.capture_mode == "ORBIT":
+            self.camera.matrix_world = self._orbit_matrix(self._index)
+            scene.frame_set(int(self._original_frame), subframe=self._original_frame - int(self._original_frame))
+            bpy.context.view_layer.update()
+        else:
+            scene.frame_set(frame, subframe=0.0)
 
         deps = bpy.context.evaluated_depsgraph_get()
         cam_eval = self.camera.evaluated_get(deps)
@@ -201,8 +267,16 @@ class RenderJob:
             write_transforms=props.export_transforms_json,
             meta={
                 "blender_version": bpy.app.version_string,
-                "frame_range": [self.frames[0], self.frames[-1], props.frame_step],
+                "frame_range": (
+                    [self.frames[0], self.frames[-1], 1]
+                    if props.capture_mode == "ORBIT"
+                    else [self.frames[0], self.frames[-1], props.frame_step]
+                ),
                 "image_format": props.image_format,
+                "capture_mode": props.capture_mode,
+                **({"orbit_target": props.orbit_target.name,
+                    "orbit_source_frame": int(self._original_frame)}
+                   if props.capture_mode == "ORBIT" else {}),
             },
         )
         self._exported = True
@@ -213,7 +287,7 @@ class RenderJob:
 
     # ------------------------------------------------------------------ finish
     def finish(self, cancelled=False, deliver=False, use_async=True):
-        if self._finished or not self._prepared:
+        if self._finished or (not self._prepared and self._orbit_camera is None):
             return
         self._finished = True
 
@@ -234,6 +308,16 @@ class RenderJob:
             self.scene.frame_set(int(frame), subframe=frame - int(frame))
         except Exception:
             pass
+
+        if self._orbit_camera is not None:
+            try:
+                orbit_data = self._orbit_camera.data
+                bpy.data.objects.remove(self._orbit_camera, do_unlink=True)
+                if orbit_data.users == 0:
+                    bpy.data.cameras.remove(orbit_data)
+            except Exception:
+                pass
+            self._orbit_camera = None
 
         if cancelled or not deliver:
             return
@@ -279,11 +363,26 @@ def _record_poses_blocking(context):
     if camera.data.type != "PERSP":
         raise PhotaraExportError("相机必须是透视相机")
 
-    if props.use_scene_frame_range:
-        start, end = scene.frame_start, scene.frame_end
+    orbit = props.capture_mode == "ORBIT"
+    if orbit:
+        if props.orbit_target is None:
+            raise PhotaraExportError("360° 环绕模式需要选择目标物体")
+        frames = list(range(1, int(props.orbit_shots) + 1))
+        deps = context.evaluated_depsgraph_get()
+        target_eval = props.orbit_target.evaluated_get(deps)
+        corners = [target_eval.matrix_world @ Vector(corner) for corner in target_eval.bound_box]
+        center = sum(corners, Vector((0.0, 0.0, 0.0))) / len(corners)
+        size = max(
+            max(point[i] for point in corners) - min(point[i] for point in corners)
+            for i in range(3)
+        )
+        radius = max(size, 1e-6) * float(props.orbit_radius_factor)
     else:
-        start, end = props.frame_start, props.frame_end
-    frames = list(range(int(start), int(end) + 1, max(1, int(props.frame_step))))
+        if props.use_scene_frame_range:
+            start, end = scene.frame_start, scene.frame_end
+        else:
+            start, end = props.frame_start, props.frame_end
+        frames = list(range(int(start), int(end) + 1, max(1, int(props.frame_step))))
     if not frames:
         raise PhotaraExportError("帧范围为空")
 
@@ -298,12 +397,23 @@ def _record_poses_blocking(context):
     original_frame = float(scene.frame_current)
     records = []
     intr = None
-    for frame in frames:
-        scene.frame_set(frame, subframe=0.0)
+    for shot_index, frame in enumerate(frames):
+        if not orbit:
+            scene.frame_set(frame, subframe=0.0)
         deps = context.evaluated_depsgraph_get()
         cam_eval = camera.evaluated_get(deps)
-        rigid_pose = cam_eval.matrix_world.to_quaternion().to_matrix().to_4x4()
-        rigid_pose.translation = cam_eval.matrix_world.translation
+        if orbit:
+            angle = float(props.orbit_start_angle) + 2.0 * math.pi * shot_index / len(frames)
+            position = Vector((
+                center.x + radius * math.cos(angle),
+                center.y + radius * math.sin(angle),
+                center.z + float(props.orbit_height),
+            ))
+            rigid_pose = (center - position).to_track_quat("-Z", "Y").to_matrix().to_4x4()
+            rigid_pose.translation = position
+        else:
+            rigid_pose = cam_eval.matrix_world.to_quaternion().to_matrix().to_4x4()
+            rigid_pose.translation = cam_eval.matrix_world.translation
         records.append(
             {
                 "filename": "frame_{:08d}{}".format(frame, ext),
@@ -319,8 +429,9 @@ def _record_poses_blocking(context):
         records[-1]["intrinsics"] = current_intrinsics
         if intr is None:
             intr = current_intrinsics
-    frame = original_frame
-    scene.frame_set(int(frame), subframe=frame - int(frame))
+    if not orbit:
+        frame = original_frame
+        scene.frame_set(int(frame), subframe=frame - int(frame))
 
     missing = [
         r["filename"]
@@ -337,8 +448,9 @@ def _record_poses_blocking(context):
         write_transforms=props.export_transforms_json,
         meta={
             "blender_version": bpy.app.version_string,
-            "frame_range": [frames[0], frames[-1], props.frame_step],
+            "frame_range": [frames[0], frames[-1], 1 if orbit else props.frame_step],
             "image_format": props.image_format,
+            "capture_mode": props.capture_mode,
         },
     )
     return records, dataset_dir, missing

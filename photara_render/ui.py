@@ -72,12 +72,20 @@ class PHOTARA_PT_frames(bpy.types.Panel):
         layout.use_property_decorate = False
 
         layout.prop(props, "camera")
-        layout.prop(props, "use_scene_frame_range")
-        if not props.use_scene_frame_range:
-            row = layout.row(align=True)
-            row.prop(props, "frame_start")
-            row.prop(props, "frame_end")
-        layout.prop(props, "frame_step")
+        layout.prop(props, "capture_mode")
+        if props.capture_mode == "ORBIT":
+            layout.prop(props, "orbit_target")
+            layout.prop(props, "orbit_shots")
+            layout.prop(props, "orbit_radius_factor")
+            layout.prop(props, "orbit_height")
+            layout.prop(props, "orbit_start_angle")
+        else:
+            layout.prop(props, "use_scene_frame_range")
+            if not props.use_scene_frame_range:
+                row = layout.row(align=True)
+                row.prop(props, "frame_start")
+                row.prop(props, "frame_end")
+            layout.prop(props, "frame_step")
 
 
 class PHOTARA_PT_photara(bpy.types.Panel):

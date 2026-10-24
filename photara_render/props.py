@@ -14,6 +14,10 @@ def _poll_camera(self, obj):
     return obj is not None and obj.type == "CAMERA"
 
 
+def _poll_mesh_or_object(self, obj):
+    return obj is not None and obj.type in {"MESH", "CURVE", "SURFACE", "META", "FONT"}
+
+
 class PhotaraProps(bpy.types.PropertyGroup):
     # ------------------------------------------------------------------ output
     output_root: StringProperty(
@@ -76,6 +80,51 @@ class PhotaraProps(bpy.types.PropertyGroup):
         description="用于渲染与导出位姿的相机（留空则使用场景相机）",
         type=bpy.types.Object,
         poll=_poll_camera,
+    )
+    capture_mode: EnumProperty(
+        name="Capture Mode",
+        description="使用已有相机动画，或自动生成物体 360° 环绕点位",
+        items=(
+            ("ANIMATION", "Camera Animation", "按场景帧范围渲染已有相机动画", 0),
+            ("ORBIT", "Object 360° Orbit", "围绕目标物体自动生成相机点位", 1),
+        ),
+        default="ANIMATION",
+    )
+    orbit_target: PointerProperty(
+        name="Target Object",
+        description="环绕拍摄的目标物体；自动以其世界空间边界框中心为注视点",
+        type=bpy.types.Object,
+        poll=_poll_mesh_or_object,
+    )
+    orbit_shots: IntProperty(
+        name="Shots",
+        description="环绕一周的拍摄张数（不重复拍摄起点）",
+        default=36,
+        min=4,
+        max=360,
+    )
+    orbit_radius_factor: FloatProperty(
+        name="Radius × Object Size",
+        description="环绕半径相对于目标物体世界空间最大尺寸的倍数",
+        default=3.0,
+        min=0.25,
+        max=20.0,
+    )
+    orbit_height: FloatProperty(
+        name="Height Offset",
+        description="相机轨道相对于目标中心的垂直偏移（Blender 世界单位）",
+        default=0.0,
+        min=-1000.0,
+        max=1000.0,
+        subtype="DISTANCE",
+    )
+    orbit_start_angle: FloatProperty(
+        name="Start Angle",
+        description="环绕起始角度",
+        default=0.0,
+        min=-6.28318530718,
+        max=6.28318530718,
+        subtype="ANGLE",
     )
 
     # ------------------------------------------------------------------ export
