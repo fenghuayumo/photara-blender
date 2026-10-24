@@ -50,6 +50,8 @@ class RenderJob:
         self._orbit_target_center = None
         self._orbit_radius = 0.0
         self._generated_poses = []
+        self._async_pending_record = None
+        self._cancel_requested = False
 
     # ------------------------------------------------------------------ prepare
     def prepare(self):
@@ -270,6 +272,16 @@ class RenderJob:
         if self._index >= len(self.frames):
             return self._finish_exports()
 
+        record, filepath = self._prepare_current_frame()
+        self.scene.render.filepath = filepath
+        bpy.ops.render.render(write_still=True)
+        self._complete_current_frame(record)
+
+        if self._index >= len(self.frames):
+            return self._finish_exports()
+        return False
+
+    def _prepare_current_frame(self):
         props = self.props
         scene = self.scene
         frame = self.frames[self._index]
@@ -300,12 +312,8 @@ class RenderJob:
         self._intr_min = fx if self._intr_min is None else min(self._intr_min, fx)
         self._intr_max = fx if self._intr_max is None else max(self._intr_max, fx)
 
-        ext = FORMAT_EXT[props.image_format]
-        filename = "frame_{:08d}{}".format(frame, ext)
-        scene.render.filepath = os.path.join(self.images_dir, filename)
-        bpy.ops.render.render(write_still=True)
-
-        self.records.append(
+        filename = "frame_{:08d}{}".format(frame, FORMAT_EXT[props.image_format])
+        return (
             {
                 "filename": filename,
                 "matrix_world": matrix,
@@ -313,15 +321,60 @@ class RenderJob:
                 "height": self.height,
                 "intrinsics": intr,
                 "frame": frame,
-            }
+            },
+            os.path.join(self.images_dir, filename),
         )
+
+    def _complete_current_frame(self, record):
+        self.records.append(record)
         self._index += 1
-        props.progress = self._index / float(len(self.frames))
-        props.status = "渲染中 {}/{}（frame {}）".format(self._index, len(self.frames), frame)
+        self.props.progress = self._index / float(len(self.frames))
+        self.props.status = "渲染中 {}/{}（frame {}）".format(
+            self._index, len(self.frames), record["frame"]
+        )
+
+    def step_async(self):
+        """Start or poll a UI-friendly render. Returns True when export is complete."""
+        if not self._prepared:
+            raise PhotaraExportError("任务尚未准备")
+        if self._async_pending_record is not None:
+            if bpy.app.is_job_running("RENDER"):
+                return False
+            record = self._async_pending_record
+            self._async_pending_record = None
+            self._complete_current_frame(record)
+            if self._cancel_requested:
+                return False
+            if self._index >= len(self.frames):
+                return self._finish_exports()
+            return False
 
         if self._index >= len(self.frames):
             return self._finish_exports()
+        if self._cancel_requested:
+            return False
+
+        record, filepath = self._prepare_current_frame()
+        self.scene.render.filepath = filepath
+        self._async_pending_record = record
+        result = bpy.ops.render.render("INVOKE_DEFAULT", write_still=True)
+        if "CANCELLED" in result:
+            self._async_pending_record = None
+            raise RuntimeError("Blender 取消了当前图像渲染")
+        if "RUNNING_MODAL" not in result and not bpy.app.is_job_running("RENDER"):
+            self._async_pending_record = None
+            self._complete_current_frame(record)
+            if self._index >= len(self.frames):
+                return self._finish_exports()
         return False
+
+    def request_cancel(self):
+        self._cancel_requested = True
+        if self._async_pending_record is not None and bpy.app.is_job_running("RENDER"):
+            try:
+                bpy.ops.render.view_cancel()
+            except Exception:
+                pass
 
     def _finish_exports(self):
         if self._exported:
@@ -578,21 +631,30 @@ class PHOTARA_OT_render_and_export(bpy.types.Operator):
             self.report({"ERROR"}, "输出目录无法创建：{}".format(e))
             return {"CANCELLED"}
 
-        self._timer = context.window_manager.event_timer_add(0.0, window=context.window)
+        self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
         if event.type == "ESC":
-            self.job.finish(cancelled=True)
-            self._remove_timer(context)
-            context.scene.photara.status = "已取消"
-            self.report({"WARNING"}, "已取消（已渲染文件保留）")
-            return {"CANCELLED"}
+            self.job.request_cancel()
+            if not bpy.app.is_job_running("RENDER"):
+                self.job.finish(cancelled=True)
+                self._remove_timer(context)
+                context.scene.photara.status = "已取消"
+                self.report({"WARNING"}, "已取消（已渲染文件保留）")
+                return {"CANCELLED"}
+            return {"PASS_THROUGH"}
 
         if event.type == "TIMER":
             try:
-                done = self.job.step()
+                if self.job._cancel_requested and not bpy.app.is_job_running("RENDER"):
+                    self.job.finish(cancelled=True)
+                    self._remove_timer(context)
+                    context.scene.photara.status = "已取消"
+                    self.report({"WARNING"}, "已取消（已渲染文件保留）")
+                    return {"CANCELLED"}
+                done = self.job.step_async()
             except PhotaraExportError as e:
                 self.job.finish(cancelled=True)
                 self._remove_timer(context)
