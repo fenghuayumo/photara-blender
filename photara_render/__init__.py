@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Photara Render & Pose Export",
     "author": "Photara Team",
-    "version": (1, 0, 6),
+    "version": (1, 0, 7),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar (N) > Photara",
     "description": "Render animation to image sequence, export per-frame camera poses "
@@ -38,6 +38,8 @@ def _classes():
         props.PhotaraProps,
         render_ops.PHOTARA_OT_render_and_export,
         render_ops.PHOTARA_OT_cancel_render,
+        render_ops.PHOTARA_OT_preview_camera_positions,
+        render_ops.PHOTARA_OT_clear_camera_preview,
         render_ops.PHOTARA_OT_export_poses,
         render_ops.PHOTARA_OT_open_dataset_folder,
         render_ops.PHOTARA_OT_test_studio_connection,

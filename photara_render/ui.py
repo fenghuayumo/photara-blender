@@ -82,8 +82,10 @@ class PHOTARA_PT_frames(bpy.types.Panel):
             layout.prop(props, "orbit_shots")
             layout.prop(props, "orbit_radius_factor")
             layout.prop(props, "orbit_levels")
-            layout.prop(props, "orbit_elevation_min")
-            layout.prop(props, "orbit_elevation_max")
+            layout.prop(props, "orbit_coverage")
+            if props.orbit_coverage == "CUSTOM":
+                layout.prop(props, "orbit_elevation_min")
+                layout.prop(props, "orbit_elevation_max")
             layout.prop(props, "orbit_start_angle")
         elif props.capture_mode == "BOX_GRID":
             layout.prop(props, "box_bounds_object")
@@ -104,6 +106,21 @@ class PHOTARA_PT_frames(bpy.types.Panel):
                 row.prop(props, "frame_start")
                 row.prop(props, "frame_end")
             layout.prop(props, "frame_step")
+
+        if props.capture_mode in {"ORBIT", "BOX_GRID"}:
+            layout.separator()
+            row = layout.row(align=True)
+            row.enabled = not props.is_rendering
+            row.operator(
+                "photara.preview_camera_positions",
+                text="Preview Camera Positions",
+                icon="CAMERA_DATA",
+            )
+            row.operator(
+                "photara.clear_camera_preview",
+                text="",
+                icon="TRASH",
+            )
 
 
 class PHOTARA_PT_photara(bpy.types.Panel):

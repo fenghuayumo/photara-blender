@@ -118,20 +118,30 @@ class PhotaraProps(bpy.types.PropertyGroup):
         min=1,
         max=12,
     )
+    orbit_coverage: EnumProperty(
+        name="Coverage",
+        description="选择上半球、完整球面，或使用自定义仰角范围",
+        items=(
+            ("UPPER_HEMISPHERE", "Upper Hemisphere", "从水平面到物体上方", 0),
+            ("FULL_SPHERE", "Full Sphere", "围绕物体完整球面覆盖", 1),
+            ("CUSTOM", "Custom Elevation", "按自定义最低和最高仰角采样", 2),
+        ),
+        default="CUSTOM",
+    )
     orbit_elevation_min: FloatProperty(
         name="Min Elevation",
         description="最低一层相对水平面的仰角；负值从物体下方拍摄",
         default=-0.5235987756,
-        min=-1.3962634016,
-        max=1.3962634016,
+        min=-1.57079632679,
+        max=1.57079632679,
         subtype="ANGLE",
     )
     orbit_elevation_max: FloatProperty(
         name="Max Elevation",
         description="最高一层相对水平面的仰角；正值从物体上方拍摄",
         default=1.0471975512,
-        min=-1.3962634016,
-        max=1.3962634016,
+        min=-1.57079632679,
+        max=1.57079632679,
         subtype="ANGLE",
     )
     orbit_start_angle: FloatProperty(

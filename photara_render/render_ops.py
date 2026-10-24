@@ -23,6 +23,40 @@ class PhotaraExportError(Exception):
     pass
 
 
+_PREVIEW_COLLECTION_TAG = "photara_camera_preview_owner"
+_PREVIEW_OBJECT_TAG = "photara_camera_preview"
+_PREVIEW_OWNER = "photara_render"
+_MAX_PREVIEW_CAMERAS = 1000
+
+
+def _get_preview_collection(scene, create=False):
+    collection = next(
+        (item for item in bpy.data.collections
+         if item.get(_PREVIEW_COLLECTION_TAG) == _PREVIEW_OWNER),
+        None,
+    )
+    if collection is None and create:
+        collection = bpy.data.collections.new("Photara Camera Preview")
+        collection[_PREVIEW_COLLECTION_TAG] = _PREVIEW_OWNER
+        scene.collection.children.link(collection)
+    elif collection is not None and not any(
+        child == collection for child in scene.collection.children
+    ):
+        scene.collection.children.link(collection)
+    if collection is not None:
+        collection.hide_render = True
+    return collection
+
+
+def _clear_preview_objects(collection):
+    if collection is None:
+        return 0
+    preview_objects = [obj for obj in collection.objects if obj.get(_PREVIEW_OBJECT_TAG)]
+    for obj in preview_objects:
+        bpy.data.objects.remove(obj, do_unlink=True)
+    return len(preview_objects)
+
+
 class RenderJob:
     """Prepare / step / finish job used by both the modal and the blocking path."""
 
@@ -173,17 +207,30 @@ class RenderJob:
         total_shots = int(props.orbit_shots)
         if total_shots < levels:
             raise PhotaraExportError("Total Shots 不能少于 Elevation Rings")
-        elevation_min = float(props.orbit_elevation_min)
-        elevation_max = float(props.orbit_elevation_max)
+        if props.orbit_coverage == "UPPER_HEMISPHERE":
+            elevation_min, elevation_max = 0.0, math.pi * 0.5
+        elif props.orbit_coverage == "FULL_SPHERE":
+            elevation_min, elevation_max = -math.pi * 0.5, math.pi * 0.5
+        else:
+            elevation_min = float(props.orbit_elevation_min)
+            elevation_max = float(props.orbit_elevation_max)
         if levels > 1 and elevation_max <= elevation_min:
             raise PhotaraExportError("多层球面环绕要求 Max Elevation 大于 Min Elevation")
         if levels == 1:
-            elevations = [min(max(0.0, elevation_min), elevation_max)]
+            if props.orbit_coverage == "UPPER_HEMISPHERE":
+                elevations = [math.pi * 0.25]
+            else:
+                elevations = [min(max(0.0, elevation_min), elevation_max)]
         else:
             elevations = [
                 elevation_min + (elevation_max - elevation_min) * ring / (levels - 1)
                 for ring in range(levels)
             ]
+        # Keep a tiny azimuth radius at the poles so each shot remains a distinct pose.
+        pole_limit = math.radians(89.5)
+        elevations = [
+            max(-pole_limit, min(pole_limit, elevation)) for elevation in elevations
+        ]
 
         base_shots, extra_shots = divmod(total_shots, levels)
         start_angle = float(props.orbit_start_angle)
@@ -744,6 +791,86 @@ class PHOTARA_OT_cancel_render(bpy.types.Operator):
             return {"CANCELLED"}
         props.cancel_requested = True
         props.status = "正在取消当前帧渲染…"
+        return {"FINISHED"}
+
+
+class PHOTARA_OT_preview_camera_positions(bpy.types.Operator):
+    """Show generated ORBIT or BOX_GRID camera poses in the 3D viewport."""
+
+    bl_idname = "photara.preview_camera_positions"
+    bl_label = "Preview Camera Positions"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene is not None and context.scene.photara.capture_mode in {
+            "ORBIT", "BOX_GRID"
+        }
+
+    def execute(self, context):
+        props = context.scene.photara
+        source_camera = props.camera or context.scene.camera
+        if source_camera is None or source_camera.type != "CAMERA":
+            self.report({"ERROR"}, "请先选择一个透视相机")
+            return {"CANCELLED"}
+        if source_camera.data.type != "PERSP":
+            self.report({"ERROR"}, "点位预览需要透视相机")
+            return {"CANCELLED"}
+
+        generator = RenderJob(context)
+        try:
+            if props.capture_mode == "ORBIT":
+                if props.orbit_target is None:
+                    raise PhotaraExportError("请先选择 Target Object")
+                poses = generator._build_orbit_poses(props.orbit_target)
+            else:
+                if props.box_bounds_object is None:
+                    raise PhotaraExportError("请先选择 Room Bounds")
+                poses = generator._build_box_grid_poses(props.box_bounds_object)
+        except PhotaraExportError as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+
+        if len(poses) > _MAX_PREVIEW_CAMERAS:
+            self.report(
+                {"ERROR"},
+                "预览点位上限为 {} 个；请减少网格数或拍摄张数".format(
+                    _MAX_PREVIEW_CAMERAS
+                ),
+            )
+            return {"CANCELLED"}
+
+        collection = _get_preview_collection(context.scene, create=True)
+        _clear_preview_objects(collection)
+        for index, pose in enumerate(poses, 1):
+            obj = bpy.data.objects.new(
+                "Photara Preview Camera {:04d}".format(index), source_camera.data
+            )
+            obj[_PREVIEW_OBJECT_TAG] = True
+            obj.matrix_world = pose
+            obj.hide_render = True
+            obj.show_in_front = True
+            collection.objects.link(obj)
+
+        message = "相机点位预览已生成：{} 个视点".format(len(poses))
+        props.status = message
+        self.report({"INFO"}, message)
+        return {"FINISHED"}
+
+
+class PHOTARA_OT_clear_camera_preview(bpy.types.Operator):
+    """Remove only the camera objects created by Photara's preview."""
+
+    bl_idname = "photara.clear_camera_preview"
+    bl_label = "Clear Preview"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        collection = _get_preview_collection(context.scene)
+        removed = _clear_preview_objects(collection)
+        message = "已清除 {} 个相机预览点位".format(removed)
+        context.scene.photara.status = message
+        self.report({"INFO"}, message)
         return {"FINISHED"}
 
 
