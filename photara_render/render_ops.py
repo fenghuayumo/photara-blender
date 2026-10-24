@@ -369,7 +369,10 @@ class RenderJob:
         return False
 
     def request_cancel(self):
+        if self._cancel_requested:
+            return
         self._cancel_requested = True
+        self.props.cancel_requested = True
         if self._async_pending_record is not None and bpy.app.is_job_running("RENDER"):
             try:
                 bpy.ops.render.view_cancel()
@@ -422,6 +425,8 @@ class RenderJob:
         self._finished = True
 
         props = self.props
+        props.is_rendering = False
+        props.cancel_requested = False
         render = self.scene.render
         img = render.image_settings
         o = self._originals
@@ -631,6 +636,8 @@ class PHOTARA_OT_render_and_export(bpy.types.Operator):
             self.report({"ERROR"}, "输出目录无法创建：{}".format(e))
             return {"CANCELLED"}
 
+        context.scene.photara.cancel_requested = False
+        context.scene.photara.is_rendering = True
         self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
@@ -648,6 +655,8 @@ class PHOTARA_OT_render_and_export(bpy.types.Operator):
 
         if event.type == "TIMER":
             try:
+                if context.scene.photara.cancel_requested and not self.job._cancel_requested:
+                    self.job.request_cancel()
                 if self.job._cancel_requested and not bpy.app.is_job_running("RENDER"):
                     self.job.finish(cancelled=True)
                     self._remove_timer(context)
@@ -703,6 +712,23 @@ class PHOTARA_OT_render_and_export(bpy.types.Operator):
             except Exception:
                 pass
             self._timer = None
+
+
+class PHOTARA_OT_cancel_render(bpy.types.Operator):
+    """Request cancellation of the active Photara frame sequence."""
+
+    bl_idname = "photara.cancel_render"
+    bl_label = "Cancel Render"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
+        props = context.scene.photara
+        if not props.is_rendering:
+            self.report({"INFO"}, "当前没有正在运行的 Photara 渲染")
+            return {"CANCELLED"}
+        props.cancel_requested = True
+        props.status = "正在取消当前帧渲染…"
+        return {"FINISHED"}
 
 
 class PHOTARA_OT_export_poses(bpy.types.Operator):

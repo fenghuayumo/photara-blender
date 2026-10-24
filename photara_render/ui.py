@@ -17,9 +17,13 @@ class PHOTARA_PT_main(bpy.types.Panel):
 
         col = layout.column()
         col.scale_y = 1.6
-        col.operator("photara.render_and_export", icon="RENDER_ANIMATION")
+        if props.is_rendering:
+            col.operator("photara.cancel_render", text="Cancel Render", icon="CANCEL")
+        else:
+            col.operator("photara.render_and_export", icon="RENDER_ANIMATION")
 
         row = layout.row(align=True)
+        row.enabled = not props.is_rendering
         row.operator("photara.export_poses", icon="EXPORT")
         row.operator("photara.open_dataset_folder", icon="FILEBROWSER", text="")
 

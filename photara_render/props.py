@@ -269,6 +269,8 @@ class PhotaraProps(bpy.types.PropertyGroup):
 
     # ------------------------------------------------------------------ status
     status: StringProperty(name="Status", default="就绪")
+    is_rendering: BoolProperty(name="Render Active", default=False, options={"HIDDEN"})
+    cancel_requested: BoolProperty(name="Cancel Requested", default=False, options={"HIDDEN"})
     progress: FloatProperty(
         name="Progress", default=0.0, min=0.0, max=1.0, subtype="PERCENTAGE"
     )
