@@ -16,6 +16,7 @@ class PHOTARA_PT_main(bpy.types.Panel):
         layout = self.layout
 
         col = layout.column()
+        col.enabled = not props.flight_recording
         col.scale_y = 1.6
         if props.is_rendering:
             col.operator("photara.cancel_render", text="Cancel Render", icon="CANCEL")
@@ -23,7 +24,7 @@ class PHOTARA_PT_main(bpy.types.Panel):
             col.operator("photara.render_and_export", icon="RENDER_ANIMATION")
 
         row = layout.row(align=True)
-        row.enabled = not props.is_rendering
+        row.enabled = not props.is_rendering and not props.flight_recording
         row.operator("photara.export_poses", icon="EXPORT")
         row.operator("photara.open_dataset_folder", icon="FILEBROWSER", text="")
 
@@ -77,6 +78,27 @@ class PHOTARA_PT_frames(bpy.types.Panel):
         layout.use_property_decorate = False
         layout.enabled = not props.is_rendering
 
+        box = layout.box()
+        box.use_property_split = False
+        box.label(text="Free Flight Recording", icon="CAMERA_DATA")
+        if props.flight_recording:
+            box.label(text="Recorded Points: {}".format(props.flight_count))
+            box.label(text="Mouse: look / WASD: move")
+            if props.flight_control != 'MANUAL':
+                box.label(text="Enter: save / Esc: discard")
+            else:
+                box.label(text="Finish navigation, then Stop")
+            row = box.row(align=True)
+            row.operator("photara.stop_flight", icon="CHECKMARK")
+            row.operator("photara.stop_flight", text="Cancel", icon="CANCEL").discard = True
+            return
+        box.prop(props, "flight_control")
+        box.prop(props, "flight_distance")
+        box.prop(props, "flight_angle")
+        box.prop(props, "flight_interval")
+        box.operator("photara.start_flight", icon="REC")
+        box.label(text="Mouse: look / WASD: move")
+
         layout.prop(props, "camera")
         layout.prop(props, "capture_mode")
         if props.capture_mode == "ORBIT":
@@ -126,7 +148,7 @@ class PHOTARA_PT_frames(bpy.types.Panel):
                 row.prop(props, "frame_end")
             layout.prop(props, "frame_step")
 
-        if props.capture_mode in {"ORBIT", "BOX_GRID"}:
+        if props.capture_mode in {"ORBIT", "BOX_GRID", "ANIMATION"}:
             layout.separator()
             row = layout.row(align=True)
             row.enabled = not props.is_rendering
@@ -140,6 +162,7 @@ class PHOTARA_PT_frames(bpy.types.Panel):
                 text="",
                 icon="TRASH",
             )
+            layout.operator("photara.focus_camera_preview", icon="VIEWZOOM")
 
 
 class PHOTARA_PT_photara(bpy.types.Panel):

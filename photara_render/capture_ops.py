@@ -78,6 +78,7 @@ def _show_camera_preview(context, poses, source_camera, plan=None):
         obj.hide_render = True
         obj.show_in_front = True
         collection.objects.link(obj)
+    _reveal_camera_preview(context, collection)
     if plan is not None:
         target = context.scene.photara.box_min_observations
         radius = max(.015, context.scene.photara.box_clearance * .12)
@@ -157,6 +158,8 @@ class RenderJob:
     def prepare(self):
         props = self.props
         scene = self.scene
+        if props.flight_recording:
+            raise PhotaraExportError("请先停止自由飞行录制并生成点位")
 
         camera = props.camera or scene.camera
         if camera is None or camera.type != "CAMERA":
@@ -651,6 +654,8 @@ class RenderJob:
 def _record_poses_blocking(context):
     """Evaluate per-frame poses without rendering (poses-only export)."""
     props = context.scene.photara
+    if props.flight_recording:
+        raise PhotaraExportError("请先停止自由飞行录制并生成点位")
     scene = context.scene
     camera = props.camera or scene.camera
     if camera is None or camera.type != "CAMERA":
@@ -916,7 +921,7 @@ class PHOTARA_OT_cancel_render(bpy.types.Operator):
 
 
 class PHOTARA_OT_preview_camera_positions(bpy.types.Operator):
-    """Show generated ORBIT or BOX_GRID camera poses in the 3D viewport."""
+    """Show generated or animated camera poses in the 3D viewport."""
 
     bl_idname = "photara.preview_camera_positions"
     bl_label = "Preview Camera Positions"
@@ -925,8 +930,8 @@ class PHOTARA_OT_preview_camera_positions(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         return context.scene is not None and context.scene.photara.capture_mode in {
-            "ORBIT", "BOX_GRID"
-        } and not context.scene.photara.is_rendering
+            "ORBIT", "BOX_GRID", "ANIMATION"
+        } and not context.scene.photara.is_rendering and not context.scene.photara.flight_recording
 
     def invoke(self, context, event):
         if context.scene.photara.capture_mode != "BOX_GRID" or context.window is None:
@@ -986,7 +991,22 @@ class PHOTARA_OT_preview_camera_positions(bpy.types.Operator):
 
         generator = RenderJob(context)
         try:
-            if props.capture_mode == "ORBIT":
+            if props.capture_mode == "ANIMATION":
+                scene = context.scene
+                start, end = ((scene.frame_start, scene.frame_end) if props.use_scene_frame_range
+                              else (props.frame_start, props.frame_end))
+                frames = range(start, end + 1, max(1, props.frame_step))
+                if not frames or len(frames) > _MAX_PREVIEW_CAMERAS:
+                    raise PhotaraExportError("预览帧范围应包含 1 至 10000 个点位")
+                original_frame, original_subframe = scene.frame_current, scene.frame_subframe
+                poses = []
+                try:
+                    for frame in frames:
+                        scene.frame_set(frame)
+                        poses.append(source_camera.evaluated_get(context.evaluated_depsgraph_get()).matrix_world.copy())
+                finally:
+                    scene.frame_set(original_frame, subframe=original_subframe)
+            elif props.capture_mode == "ORBIT":
                 if props.orbit_target is None:
                     raise PhotaraExportError("请先选择 Target Object")
                 poses = generator._build_orbit_poses(props.orbit_target)
@@ -1014,6 +1034,57 @@ class PHOTARA_OT_preview_camera_positions(bpy.types.Operator):
         props.status = message
         self.report({"INFO"}, message)
         return {"FINISHED"}
+
+
+def _reveal_camera_preview(context, collection):
+    collection.hide_viewport = False
+    layer = context.view_layer.layer_collection.children.get(collection.name)
+    if layer is not None:
+        layer.exclude = False
+        layer.hide_viewport = False
+    context.view_layer.update()
+    space = context.space_data
+    if space is not None and space.type == 'VIEW_3D':
+        space.overlay.show_overlays = True
+        space.overlay.show_extras = True
+        space.show_object_viewport_camera = True
+        for obj in collection.objects:
+            obj.hide_set(False)
+            if space.local_view is not None:
+                obj.local_view_set(space, True)
+        context.area.tag_redraw()
+
+
+class PHOTARA_OT_focus_camera_preview(bpy.types.Operator):
+    bl_idname = 'photara.focus_camera_preview'
+    bl_label = 'Frame Camera Positions'
+    bl_description = '显示并选中预览相机，将视图定位到所有预览点位'
+
+    @classmethod
+    def poll(cls, context):
+        return (context.area is not None and context.area.type == 'VIEW_3D'
+                and not context.scene.photara.is_rendering
+                and not context.scene.photara.flight_recording)
+
+    def execute(self, context):
+        collection = _get_preview_collection(context.scene)
+        cameras = [] if collection is None else [o for o in collection.objects
+                   if o.type == 'CAMERA' and o.get(_PREVIEW_OBJECT_TAG)]
+        if not cameras:
+            self.report({'WARNING'}, '没有相机点位预览，请先点击 Preview Camera Positions')
+            return {'CANCELLED'}
+        region = next((r for r in context.area.regions if r.type == 'WINDOW'), None)
+        if region is None:
+            return {'CANCELLED'}
+        _reveal_camera_preview(context, collection)
+        for obj in context.view_layer.objects:
+            obj.select_set(False)
+        for obj in cameras:
+            obj.select_set(True)
+        context.view_layer.objects.active = cameras[0]
+        with context.temp_override(region=region):
+            bpy.ops.view3d.view_selected('EXEC_DEFAULT', use_all_regions=False)
+        return {'FINISHED'}
 
 
 class PHOTARA_OT_clear_camera_preview(bpy.types.Operator):

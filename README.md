@@ -61,6 +61,16 @@ Indoor Box Grid 使用临时透视相机，所有图像固定在当前场景帧�
 或 Cube Empty；支持旋转与缩放。辅助边界盒应启用 Bounds Is Helper，采集期间会临时隐藏并恢复；
 若选择实际房间壳体，关闭该选项。墙、家具和室内细节仍需保留渲染可见。
 
+### 自由飞行录制相机点位
+
+1. 在 3D 视图的 **Camera & Frames → Free Flight Recording** 设置 Point Distance（场景单位）、Point Angle 和 Sample Interval（秒）。移动距离或朝向变化达到任一阈值时新增点位。
+2. 切换至透视视图，选择 **Camera Control**：默认 **First Person (Walk)** 保持高度进行水平移动，**Free Flight** 沿视线移动，**Manual View Navigation** 使用 Blender 自带导航。前两种开始后直接进入插件控制：鼠标转向、WASD 移动、Q/E 升降、Shift 加速；Enter 保存，Esc 取消并恢复视图。速度和鼠标灵敏度读取 Blender Preferences → Navigation → Walk 的设置。相机视图启动时，会用独立导航相机沿用当前构图和镜头参数，不修改原相机。
+3. 普通透视视图下，可用 Enter 保存或 Esc 取消。Manual View Navigation 需先退出 Blender 自带导航，再点 **Stop & Generate**。起点和最终位置会保留；静止期间不重复采样。最多记录 10000 点，到达上限自动生成。**Cancel** 丢弃本次录制。
+4. 自动创建独立的 **Photara Recorded Flight** 相机，每个点位对应一个整数帧，保存位置与四元数朝向，同时在 **Photara Camera Preview** 集合显示所有相机点位与朝向。预览不参与渲染。插件自动选中该相机、切换至 Camera Animation，并设置采集帧范围和步长；点击 Render & Export 即可逐点渲染。原相机动画不会被覆盖。
+5. 已有录制或编辑动画后，可点击 **Preview Camera Positions** 按当前采集帧范围重新生成预览，旁边的垃圾桶按钮清除预览，保留录制相机和动画。
+
+相机动画随 `.blend` 保存，可在 Camera 中重新选择以复用，也可在时间线继续编辑。录制为点位序列，不保留实际飞行速度或停留时间；渲染只采样整数帧。镜头参数在开始录制时固定：相机视图复制当前透视相机参数，普通透视视图使用视图焦距。正交视图不支持。录制期间保持当前场景和视图打开，切换场景或关闭视图会取消录制。
+
 ### 室内覆盖采集流程
 
 1. 选择 Room Bounds、透视 Camera，并开启 Automatic Coverage。默认 3×3×3 层点阵、24mm 镜头，

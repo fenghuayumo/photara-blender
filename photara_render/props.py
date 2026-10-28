@@ -23,6 +23,21 @@ def _poll_bounds(self, obj):
 
 
 class PhotaraProps(bpy.types.PropertyGroup):
+    flight_control: EnumProperty(
+        name="Camera Control",
+        description="开始录制时进入的相机控制方式",
+        items=(
+            ('WALK', 'First Person (Walk)', '鼠标转向，WASD 水平移动，Q/E 升降；Enter 保存，Esc 取消'),
+            ('FLY', 'Free Flight', '鼠标转向，沿视线自由移动；Enter 保存，Esc 取消'),
+            ('MANUAL', 'Manual View Navigation', '只开始录制，自行操作视图导航'),
+        ),
+        default='WALK',
+    )
+    flight_recording: BoolProperty(default=False, options={'SKIP_SAVE'})
+    flight_count: IntProperty(default=0, options={'SKIP_SAVE'})
+    flight_distance: FloatProperty(name="Point Distance", description="相对上一点的移动距离达到此值时记录（场景单位）", default=0.25, min=0.001, subtype='DISTANCE')
+    flight_angle: FloatProperty(name="Point Angle", description="相对上一点的旋转达到此角度时记录", default=0.1745329252, min=0.001, max=3.1415926536, subtype='ANGLE')
+    flight_interval: FloatProperty(name="Sample Interval", description="检查视图变化的间隔（秒）；录制最多 10000 个点位", default=0.1, min=0.02, max=2.0)
     # ------------------------------------------------------------------ output
     output_root: StringProperty(
         name="Output Root",
