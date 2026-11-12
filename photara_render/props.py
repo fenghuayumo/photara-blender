@@ -22,6 +22,10 @@ def _poll_bounds(self, obj):
     return obj is not None and obj.type in {"MESH", "EMPTY"}
 
 
+def _poll_orbit_orientation(self, obj):
+    return obj is not None and obj.type == "EMPTY"
+
+
 class PhotaraProps(bpy.types.PropertyGroup):
     flight_control: EnumProperty(
         name="Camera Control",
@@ -132,8 +136,8 @@ class PhotaraProps(bpy.types.PropertyGroup):
     )
     orbit_levels: IntProperty(
         name="Elevation Rings",
-        description="球面轨道的垂直层数",
-        default=3,
+        description="球面轨道的垂直层数；多层时包含端点，极点仅一个机位；单层为单圈",
+        default=4,
         min=1,
         max=12,
     )
@@ -145,11 +149,31 @@ class PhotaraProps(bpy.types.PropertyGroup):
             ("FULL_SPHERE", "Full Sphere", "围绕物体完整球面覆盖", 1),
             ("CUSTOM", "Custom Elevation", "按自定义最低和最高仰角采样", 2),
         ),
-        default="CUSTOM",
+        default="UPPER_HEMISPHERE",
+    )
+    orbit_direction: EnumProperty(
+        name="Hemisphere Direction",
+        description="采集半球的顶部方向；方位角和仰角相对于此方向计算，完整球面也按此朝向旋转",
+        items=(
+            ("POS_Z", "Up (+Z)", "世界坐标上方", 0),
+            ("NEG_Z", "Down (-Z)", "世界坐标下方", 1),
+            ("NEG_X", "Left (-X)", "世界坐标负 X", 2),
+            ("POS_X", "Right (+X)", "世界坐标正 X", 3),
+            ("NEG_Y", "Front (-Y)", "世界坐标负 Y", 4),
+            ("POS_Y", "Back (+Y)", "世界坐标正 Y", 5),
+            ("OBJECT", "Custom Empty", "使用 Empty 的世界旋转，局部 +Z 为半球顶部", 6),
+        ),
+        default="POS_Z",
+    )
+    orbit_orientation_object: PointerProperty(
+        name="Direction Empty",
+        description="旋转此 Empty 调整采集方向；仅使用世界旋转，位置和缩放不改变采集中心和半径",
+        type=bpy.types.Object,
+        poll=_poll_orbit_orientation,
     )
     orbit_elevation_min: FloatProperty(
         name="Min Elevation",
-        description="最低一层相对水平面的仰角；负值从物体下方拍摄",
+        description="相对采集坐标系赤道面的最低仰角；负值位于选定方向的反面",
         default=-0.5235987756,
         min=-1.57079632679,
         max=1.57079632679,
@@ -157,7 +181,7 @@ class PhotaraProps(bpy.types.PropertyGroup):
     )
     orbit_elevation_max: FloatProperty(
         name="Max Elevation",
-        description="最高一层相对水平面的仰角；正值从物体上方拍摄",
+        description="相对采集坐标系赤道面的最高仰角；正值朝向选定方向",
         default=1.0471975512,
         min=-1.57079632679,
         max=1.57079632679,

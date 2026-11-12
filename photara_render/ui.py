@@ -107,6 +107,9 @@ class PHOTARA_PT_frames(bpy.types.Panel):
             layout.prop(props, "orbit_radius_factor")
             layout.prop(props, "orbit_levels")
             layout.prop(props, "orbit_coverage")
+            layout.prop(props, "orbit_direction")
+            if props.orbit_direction == "OBJECT":
+                layout.prop(props, "orbit_orientation_object")
             if props.orbit_coverage == "CUSTOM":
                 layout.prop(props, "orbit_elevation_min")
                 layout.prop(props, "orbit_elevation_max")

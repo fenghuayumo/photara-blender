@@ -284,48 +284,37 @@ class RenderJob:
         radius = size * float(props.orbit_radius_factor)
         levels = int(props.orbit_levels)
         total_shots = int(props.orbit_shots)
-        if total_shots < levels:
-            raise PhotaraExportError("Total Shots 不能少于 Elevation Rings")
-        if props.orbit_coverage == "UPPER_HEMISPHERE":
-            elevation_min, elevation_max = 0.0, math.pi * 0.5
-        elif props.orbit_coverage == "FULL_SPHERE":
-            elevation_min, elevation_max = -math.pi * 0.5, math.pi * 0.5
+        try:
+            rings = camera_utils.orbit_ring_layout(
+                total_shots, levels, props.orbit_coverage,
+                float(props.orbit_elevation_min), float(props.orbit_elevation_max))
+        except ValueError as exc:
+            raise PhotaraExportError(str(exc)) from exc
+        self._orbit_elevation_range = [rings[0][0], rings[-1][0]]
+        if props.orbit_direction == "OBJECT":
+            control = props.orbit_orientation_object
+            if control is None or control.type != "EMPTY":
+                raise PhotaraExportError("Custom Empty 方向需要选择一个 Empty 控制物体")
+            rotation = control.evaluated_get(deps).matrix_world.to_quaternion().to_matrix()
         else:
-            elevation_min = float(props.orbit_elevation_min)
-            elevation_max = float(props.orbit_elevation_max)
-        if levels > 1 and elevation_max <= elevation_min:
-            raise PhotaraExportError("多层球面环绕要求 Max Elevation 大于 Min Elevation")
-        if levels == 1:
-            if props.orbit_coverage == "UPPER_HEMISPHERE":
-                elevations = [math.pi * 0.25]
-            else:
-                elevations = [min(max(0.0, elevation_min), elevation_max)]
-        else:
-            elevations = [
-                elevation_min + (elevation_max - elevation_min) * ring / (levels - 1)
-                for ring in range(levels)
-            ]
-        # Keep a tiny azimuth radius at the poles so each shot remains a distinct pose.
-        pole_limit = math.radians(89.5)
-        elevations = [
-            max(-pole_limit, min(pole_limit, elevation)) for elevation in elevations
-        ]
-
-        base_shots, extra_shots = divmod(total_shots, levels)
+            axes = {"POS_Z": (0, 0, 1), "NEG_Z": (0, 0, -1),
+                    "POS_X": (1, 0, 0), "NEG_X": (-1, 0, 0),
+                    "POS_Y": (0, 1, 0), "NEG_Y": (0, -1, 0)}
+            rotation = Vector((0, 0, 1)).rotation_difference(Vector(axes[props.orbit_direction])).to_matrix()
+        self._orbit_orientation = [list(row) for row in rotation]
         start_angle = float(props.orbit_start_angle)
         poses = []
-        for ring, elevation in enumerate(elevations):
-            ring_shots = base_shots + (1 if ring < extra_shots else 0)
+        for ring, (elevation, ring_shots) in enumerate(rings):
             stagger = math.pi / ring_shots if ring % 2 else 0.0
             for shot in range(ring_shots):
                 azimuth = start_angle + stagger + 2.0 * math.pi * shot / ring_shots
-                position = Vector((
-                    center.x + radius * math.cos(elevation) * math.cos(azimuth),
-                    center.y + radius * math.cos(elevation) * math.sin(azimuth),
-                    center.z + radius * math.sin(elevation),
+                offset = Vector((
+                    radius * math.cos(elevation) * math.cos(azimuth),
+                    radius * math.cos(elevation) * math.sin(azimuth),
+                    radius * math.sin(elevation),
                 ))
-                matrix = (center - position).to_track_quat("-Z", "Y").to_matrix().to_4x4()
-                matrix.translation = position
+                matrix = (rotation @ (-offset).to_track_quat("-Z", "Y").to_matrix()).to_4x4()
+                matrix.translation = center + rotation @ offset
                 poses.append(matrix)
         self._orbit_target_center = center
         self._orbit_radius = radius
@@ -552,9 +541,10 @@ class RenderJob:
                 **({"orbit_target": props.orbit_target.name,
                     "orbit_source_frame": int(self._original_frame),
                     "orbit_levels": props.orbit_levels,
-                    "orbit_elevation_range": [
-                        float(props.orbit_elevation_min), float(props.orbit_elevation_max)
-                    ]}
+                    "orbit_coverage": props.orbit_coverage,
+                    "orbit_direction": props.orbit_direction,
+                    "orbit_orientation": self._orbit_orientation,
+                    "orbit_elevation_range": self._orbit_elevation_range}
                    if props.capture_mode == "ORBIT" else {}),
                 **({"room_bounds": props.box_bounds_object.name,
                     "box_grid": [props.box_grid_x, props.box_grid_y, props.box_grid_z],
@@ -756,9 +746,10 @@ def _record_poses_blocking(context):
             **({"orbit_target": props.orbit_target.name,
                 "orbit_source_frame": int(original_frame),
                 "orbit_levels": props.orbit_levels,
-                "orbit_elevation_range": [
-                    float(props.orbit_elevation_min), float(props.orbit_elevation_max)
-                ]}
+                "orbit_coverage": props.orbit_coverage,
+                "orbit_direction": props.orbit_direction,
+                "orbit_orientation": generator._orbit_orientation,
+                "orbit_elevation_range": generator._orbit_elevation_range}
                if props.capture_mode == "ORBIT" else {}),
             **({"room_bounds": props.box_bounds_object.name,
                 "box_grid": [props.box_grid_x, props.box_grid_y, props.box_grid_z],

@@ -108,3 +108,44 @@ def compute_intrinsics(camera, width, height, pixel_aspect_x=1.0, pixel_aspect_y
 
 def fov_x_from_fx(fx, width):
     return 2.0 * math.atan(0.5 * width / fx)
+
+
+def orbit_ring_layout(total_shots, levels, coverage, elevation_min, elevation_max):
+    """Return (elevation, count) rings, with one camera per included pole.
+
+    Equal elevation spacing and circumference-weighted counts avoid crowding
+    the poles. Largest remainders preserve the exact requested image budget.
+    A single level remains a single ring (45 degrees for upper hemisphere).
+    """
+    if levels < 1 or total_shots < levels:
+        raise ValueError("Total Shots 不能少于 Elevation Rings，层数必须为正")
+    if coverage == "UPPER_HEMISPHERE":
+        elevation_min, elevation_max = 0.0, math.pi / 2
+    elif coverage == "FULL_SPHERE":
+        elevation_min, elevation_max = -math.pi / 2, math.pi / 2
+    # Blender stores angle properties as float32, including the +/-90 endpoints.
+    elevation_min, elevation_max = [
+        math.copysign(math.pi / 2, angle) if abs(abs(angle) - math.pi / 2) < 1e-6 else angle
+        for angle in (elevation_min, elevation_max)]
+    if not -math.pi / 2 <= elevation_min <= elevation_max <= math.pi / 2:
+        raise ValueError("仰角范围必须在 -90° 到 90° 内，且最大值不能小于最小值")
+    if levels > 1 and elevation_max <= elevation_min:
+        raise ValueError("多层球面环绕要求 Max Elevation 大于 Min Elevation")
+    if levels == 1:
+        elevations = [math.pi / 4 if coverage == "UPPER_HEMISPHERE"
+                      else min(max(0.0, elevation_min), elevation_max)]
+    else:
+        elevations = [elevation_min + (elevation_max - elevation_min) * i / (levels - 1)
+                      for i in range(levels)]
+    weights = [max(0.0, math.cos(angle)) if abs(math.cos(angle)) > 1e-8 else 0.0
+               for angle in elevations]
+    remaining = total_shots - levels
+    weight_sum = sum(weights)
+    if remaining and not weight_sum:
+        raise ValueError("仅极点的层无法分配额外机位；请增加层数或调整仰角范围")
+    quotas = [remaining * weight / weight_sum if weight_sum else 0 for weight in weights]
+    extras = [math.floor(quota) for quota in quotas]
+    order = sorted(range(levels), key=lambda i: (-(quotas[i] - extras[i]), i))
+    for index in order[:remaining - sum(extras)]:
+        extras[index] += 1
+    return [(angle, 1 + extra) for angle, extra in zip(elevations, extras)]
