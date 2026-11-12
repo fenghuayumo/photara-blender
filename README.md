@@ -190,3 +190,7 @@ Studio 可通过外部数据集文件选择器打开 JSON，或由插件 AUTO / 
 训练静态 3DGS 时保持场景不动，只移动相机；推荐 RGB PNG、关闭 Render Region 和运动模糊。
 相机自身或父级缩放不会写入位姿，世界坐标位置与方向保持不变。
 内参包含 sensor fit、pixel aspect 和 lens shift；脚本指定帧范围后会自动关闭 Use Scene Range。
+
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE) 授权。
