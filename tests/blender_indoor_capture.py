@@ -127,10 +127,15 @@ with tempfile.TemporaryDirectory(prefix="photara_indoor_") as directory:
     report = json.loads(Path(directory, "capture_coverage.json").read_text())
     assert report["capture_completed"] and report["completed_images"] == total
     assert report["initial_surface_points"] > 0
+    assert report["initial_colored_points"] == report["initial_surface_points"]
+    assert report["initial_gray_fallback_points"] == 0
+    assert not report["initial_point_color_failures"]
     assert transforms["ply_file_path"] == "initial_points.ply"
     assert Path(directory, "initial_points.ply").exists()
+    colored_ply = Path(directory, "initial_points.ply").read_text()
     exported, _, missing = capture_ops._record_poses_blocking(bpy.context)
     assert not missing and len(exported) == total
+    assert Path(directory, "initial_points.ply").read_text() == colored_ply
     np.testing.assert_allclose(exported[0]["matrix_world"], job.records[0]["matrix_world"], atol=1e-6)
 
     assert exported[0]["intrinsics"] == job.records[0]["intrinsics"]

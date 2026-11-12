@@ -527,7 +527,8 @@ class RenderJob:
             raise PhotaraExportError("没有可导出的帧")
 
         props = self.props
-        initial_points = self._indoor_plan.initial_points(self.records) if self._indoor_plan else None
+        initial_points = (self._indoor_plan.initial_points(self.records, self.images_dir)
+                          if self._indoor_plan else None)
         if self._indoor_plan is not None:
             self._indoor_plan.report["completed_images"] = len(self.records)
             self._indoor_plan.report["capture_completed"] = len(self.records) == len(self.frames)
@@ -735,7 +736,7 @@ def _record_poses_blocking(context):
     initial_points = None
     if props.capture_mode == "BOX_GRID":
         existing_records = [record for record in records if record["filename"] not in missing]
-        initial_points = generator._indoor_plan.initial_points(existing_records)
+        initial_points = generator._indoor_plan.initial_points(existing_records, images_dir)
         generator._indoor_plan.report["images_present"] = len(records) - len(missing)
         generator._indoor_plan.report["capture_completed"] = not missing
         generator._indoor_plan.write(dataset_dir)
