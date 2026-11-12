@@ -24,32 +24,6 @@ class PlanningError(ValueError):
     pass
 
 
-def _rendered_pixels(filepath, width, height):
-    """Read saved RGB values, bottom row first (Blender's pixel order)."""
-    image = bpy.data.images.load(filepath, check_existing=False)
-    try:
-        # PNG/JPEG/etc already contain the output view transform. Reading as
-        # data preserves these encoded values instead of decoding them to linear.
-        image.colorspace_settings.is_data = True
-        if tuple(image.size) != (width, height):
-            raise ValueError("Image size does not match exported camera")
-        pixels = np.empty(len(image.pixels), dtype=np.float32)
-        image.pixels.foreach_get(pixels)
-        pixels = pixels.reshape(height, width, -1)
-        rgb = pixels[:, :, :3].copy()
-        valid = np.all(np.isfinite(rgb), axis=2)
-        if filepath.lower().endswith(".exr"):
-            # COLMAP/PLY store only byte RGB, so encode linear HDR as sRGB.
-            # This clips HDR highlights; it does not apply AgX/Filmic a second time.
-            rgb = np.clip(rgb, 0, 1)
-            rgb = np.where(rgb <= .0031308, 12.92 * rgb,
-                           1.055 * np.power(rgb, 1 / 2.4) - .055)
-        if pixels.shape[2] >= 4:
-            valid &= pixels[:, :, 3] > .99
-        return np.clip(rgb, 0, 1), valid
-    finally:
-        bpy.data.images.remove(image)
-
 
 def optics(camera, props):
     """Return a temporary optics copy; the caller owns and removes it."""
@@ -77,17 +51,14 @@ class CapturePlan:
     report: dict = field(default_factory=dict)
     completed_counts: list = field(default_factory=list)
 
-    def initial_points(self, records, images_dir):
-        """Visible surface seeds colored by projection into saved render frames."""
+    def update_completed_coverage(self, records):
+        """Audit completed camera coverage; cloud generation is mode-independent."""
         allowed = {}
         for index, observations in enumerate(self.observations):
             for position in observations:
                 key = tuple(round(float(v), 4) for v in position)
                 allowed.setdefault(key, []).append(index)
         seen = [set() for _ in self.samples]
-        color_sums = np.zeros((len(self.samples), 3), dtype=float)
-        color_counts = np.zeros(len(self.samples), dtype=int)
-        color_failures = []
         samples = np.asarray([tuple(point) for point in self.samples], dtype=float)
         near, far = self.report["clip_range"]
         for frame in records:
@@ -109,41 +80,11 @@ class CapturePlan:
             selected = np.flatnonzero(mask)
             for index in selected:
                 seen[indices[index]].add(key)
-            if not len(selected):
-                continue
-            try:
-                rgb, valid = _rendered_pixels(
-                    os.path.join(images_dir, frame["filename"]), width, height)
-            except (RuntimeError, OSError, ValueError) as exc:
-                color_failures.append({"filename": frame["filename"], "error": str(exc)})
-                continue
-            # Projection uses a top-left origin; Image.pixels starts at bottom-left.
-            x = np.clip(np.floor(u[selected]).astype(int), 0, width - 1)
-            y = height - 1 - np.clip(np.floor(v[selected]).astype(int), 0, height - 1)
-            usable = valid[y, x]
-            sample_indices = np.asarray(indices)[selected[usable]]
-            color_sums[sample_indices] += rgb[y[usable], x[usable]]
-            color_counts[sample_indices] += 1
         self.completed_counts = [len(positions) for positions in seen]
         target = self.report["required_distinct_positions"]
         self.report["completed_coverage_fraction"] = sum(
             count >= target for count in self.completed_counts) / max(1, len(self.samples))
         self.report["completed_unseen_samples"] = sum(count == 0 for count in self.completed_counts)
-        points = []
-        for index, (sample, count) in enumerate(zip(self.samples, self.completed_counts)):
-            if count >= 2:
-                color = (np.rint(255 * color_sums[index] / color_counts[index]).astype(int).tolist()
-                         if color_counts[index] else [128, 128, 128])
-                points.append({"position": list(sample), "color": color})
-        self.report["initial_surface_points"] = len(points)
-        self.report["initial_point_color_source"] = "saved_render_pixels_mean"
-        self.report["initial_colored_points"] = int(sum(
-            count >= 2 and color_counts[index] > 0
-            for index, count in enumerate(self.completed_counts)))
-        self.report["initial_gray_fallback_points"] = len(points) - self.report["initial_colored_points"]
-        self.report["initial_point_color_failures"] = color_failures
-        return points
-
     def write(self, directory):
         os.makedirs(directory, exist_ok=True)
         with open(os.path.join(directory, "capture_coverage.json"), "w", encoding="utf-8") as stream:
@@ -534,7 +475,7 @@ class IndoorPlanner:
                 "Closed meshes enclosing the entire capture bounds are treated as room shells.",
                 "Point density, surface texture, lighting and training settings also affect 3DGS quality.",
                 "Use matching viewport/render modifier levels; animated scenes are captured at one fixed frame.",
-                "Initialization colors average visible saved render pixels; EXR is clipped and sRGB encoded for byte RGB. Missing colors fall back to neutral gray.",
+                "Initial cloud generation uses the shared visible-surface pixel-ray pipeline, independently of coverage samples.",
             ],
         }
         self.props.box_coverage_status = "覆盖 {:.1%}；未见 {}；不足 {}；{} 帧".format(

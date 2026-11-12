@@ -18,7 +18,9 @@ if "bpy" in locals():
         "camera_utils",
         "colmap_export",
         "photara_bridge",
+        "image_pixels",
         "indoor_capture",
+        "surface_points",
         "capture_ops",
         "flight_recording",
         "ui",
@@ -36,7 +38,7 @@ else:
         import bpy  # noqa: F401
 
         from . import props, camera_utils, colmap_export, photara_bridge, indoor_capture, ui
-        from . import capture_ops, flight_recording
+        from . import capture_ops, flight_recording, image_pixels, surface_points
         render_ops = capture_ops
     except ImportError:
         # Outside Blender (unit tests): the pure modules still import fine.
@@ -62,6 +64,7 @@ def _classes():
         render_ops.PHOTARA_OT_clear_camera_preview,
         render_ops.PHOTARA_OT_focus_camera_preview,
         render_ops.PHOTARA_OT_export_poses,
+        render_ops.PHOTARA_OT_rebuild_point_cloud,
         render_ops.PHOTARA_OT_open_dataset_folder,
         render_ops.PHOTARA_OT_test_studio_connection,
         ui.PHOTARA_PT_main,

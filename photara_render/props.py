@@ -290,6 +290,12 @@ class PhotaraProps(bpy.types.PropertyGroup):
     )
 
     # ------------------------------------------------------------------ export
+    initial_point_count: IntProperty(name="Initial Points", default=20000, min=100, max=1000000,
+        description="所有采集模式共用的表面初始点云数量上限")
+    point_samples_per_frame: IntProperty(name="Point Rays per Image", default=1024, min=16, max=65536,
+        description="每张已保存图像的像素射线采样数；提高可改善表面覆盖，增加导出时间")
+    point_merge_distance: FloatProperty(name="Point Merge Distance", default=.01, min=.00001,
+        subtype="DISTANCE", description="相同世界空间体素内的表面点合并并平均颜色")
     export_colmap: BoolProperty(
         name="COLMAP (3DGS)",
         description="导出 COLMAP 文本模型 sparse/0/{cameras,images,points3D}.txt —— 3DGS 标准输入",

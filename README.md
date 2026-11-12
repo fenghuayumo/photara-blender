@@ -102,12 +102,31 @@ Indoor Box Grid 使用临时透视相机，所有图像固定在当前场景帧�
    中途结束保留已完成图像及其位姿，不启动训练。
 
 `capture_coverage.json` 包含完整/未见/不足样本数、采集帧数、预算、补拍数量、相机位置和逐样本
-观察数量，并区分规划覆盖和已完成图像覆盖。渲染成功后还会从被至少两个已导出位置看见的样本生成几何初始点云：COLMAP 的
-points3D.txt 和 JSON 的 initial_points.ply，避免仅用相机包围盒随机初始化。初始颜色通过相机内参和位姿
-把可见表面点投影到已保存的渲染图像，读取对应像素并对多个有效视角取平均；PNG/JPEG 等保留保存后的
-像素颜色，不重复应用视图变换。EXR 线性 HDR 转为 8 位 sRGB 并裁剪高光，不对应 AgX/Filmic 显示效果。
-无有效像素的点回退到中性灰；覆盖报告记录着色点数、灰色回退点数和图像读取错误。
-最终外观由渲染图像训练。点云密度随 Coverage Samples 调整。
+观察数量，并区分规划覆盖和已完成图像覆盖。Coverage Samples 仅控制室内覆盖分析的采样密度。
+
+### 统一表面初始点云
+
+动画、环绕和室内点阵都使用同一套点云流程：从已保存图像采样像素中心，按该帧内参和位姿生成
+射线，在对应场景帧的求值几何中保留首个可见表面交点，再读取该像素的渲染颜色。隐藏于渲染的物体
+和辅助预览不作为遮挡；真正被前景挡住的背面不会被采样。点云位置来自实际几何，不沿相机轨迹随机生成。
+同一体素内的样本合并并平均颜色，保存真实命中位置；超出预算时用确定性的蓄水池采样保留全序列中的点。
+单视图的几何命中即可生成点，因为场景几何已知，无需依赖 SfM 三角化的双视图条件；不导出特征轨迹。
+
+Output 面板中 Initial Points 控制点数上限（默认 20000），Point Rays per Image 控制每帧射线数量
+（默认 1024），Point Merge Distance 控制世界空间合并距离（默认 0.01）。像素读取失败、背景或未命中
+几何的像素不生成假点或灰色替代点。报告 initial_points_report.json 记录射线数、命中数、点数和读取失败。
+COLMAP points3D.txt 和 initial_points.ply 使用同一份彩色点；transforms.json 包含 PLY 路径、场景帧和裁剪范围。
+PNG/JPEG 等保留保存后的像素颜色；EXR 线性 HDR 转为 8 位 sRGB 并裁剪高光，不对应 AgX/Filmic 显示效果。
+
+现有数据无需重渲染：打开采集使用的原场景、设置 Output Root，点击 Rebuild Point Cloud from Saved Cameras。
+它读取数据集 transforms.json 的相机，不会用当前场景相机覆盖原位姿；成功生成非空点云后，先将旧点云与
+元数据备份到 point_cloud_backups/，再写入点云并更新 PLY 引用。原图片、cameras.txt 和 images.txt 保持不变。
+旧版数据的场景帧从 manifest 推导；必须保留采集时的场景几何和可见性。完成后在 Studio 重新加载数据集。
+普通“仅导出位姿”仍会重新求值当前相机，因此修复已有数据应使用上述独立重建按钮。
+
+表面射线把材质视为不透明，不模拟玻璃透射、镜面虚像、体积、景深或运动模糊；需使用一致的视口/渲染几何。
+动画模式逐帧求值几何，环绕模式固定在源场景帧。静态 3DGS 无法表达运动物体，运动区域可能出现多时刻叠影。
+最终外观仍由渲染图像训练。
 
 覆盖分析把网格视为不透明几何，暂不模拟玻璃、镜面或体积材质；需使用一致的视口/渲染修改器级别。
 渲染可见但视口隐藏/排除的网格会阻止分析，需先启用视口可见性；分析和采集期间不要编辑场景。
@@ -126,7 +145,7 @@ photara_dataset/
 ├── sparse/0/                  # COLMAP 文本模型（3DGS 训练主格式）
 │   ├── cameras.txt            # CAMERA_ID PINHOLE W H fx fy cx cy
 │   ├── images.txt             # IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME
-│   └── points3D.txt           # 室内多视点可见表面的初始点；其他模式可为空
+│   └── points3D.txt           # 所有采集模式的可见表面初始点
 ├── initial_points.ply         # 室内几何初始化（存在有效多视图样本时）
 ├── capture_coverage.json      # 室内采样覆盖报告与未完成状态
 ├── transforms.json            # Nerfstudio/Blender 位姿（fl_x 风格）

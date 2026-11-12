@@ -7,7 +7,7 @@ import math
 import bpy
 from mathutils import Vector
 
-from . import camera_utils, colmap_export, photara_bridge, indoor_capture
+from . import camera_utils, colmap_export, photara_bridge, indoor_capture, surface_points
 
 
 FORMAT_EXT = {
@@ -116,6 +116,41 @@ def _show_camera_preview(context, poses, source_camera, plan=None):
         context.scene.photara.status = context.scene.photara.box_coverage_status
     else:
         context.scene.photara.status = "相机点位预览已生成：{} 个视点".format(len(poses))
+
+
+def _build_surface_points(context, records, images_dir):
+    props = context.scene.photara
+    ignored = ([props.box_bounds_object] if props.capture_mode == "BOX_GRID"
+               and props.box_bounds_helper and props.box_bounds_object else [])
+    props.status = "正在生成可见表面初始点云…"
+    return surface_points.build(context, records, images_dir,
+        max_points=props.initial_point_count, samples_per_frame=props.point_samples_per_frame,
+        merge_distance=props.point_merge_distance, ignored_objects=ignored)
+
+
+class PHOTARA_OT_rebuild_point_cloud(bpy.types.Operator):
+    bl_idname = "photara.rebuild_point_cloud"
+    bl_label = "Rebuild Point Cloud from Saved Cameras"
+    bl_description = "使用现有导出相机和图片生成表面点云；先备份点云与元数据，不改相机或重新渲染"
+
+    @classmethod
+    def poll(cls, context):
+        return context.scene is not None and not context.scene.photara.is_rendering
+
+    def execute(self, context):
+        props = context.scene.photara
+        try:
+            points, _ = surface_points.rebuild_dataset(context,
+                os.path.abspath(bpy.path.abspath(props.output_root)),
+                max_points=props.initial_point_count,
+                samples_per_frame=props.point_samples_per_frame,
+                merge_distance=props.point_merge_distance)
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        props.status = "表面点云已重建：{} 点；请在 Studio 重新加载数据集".format(len(points))
+        self.report({"INFO"}, props.status)
+        return {"FINISHED"}
 
 
 class RenderJob:
@@ -424,6 +459,9 @@ class RenderJob:
                 "height": self.height,
                 "intrinsics": intr,
                 "frame": frame,
+                "scene_frame": scene.frame_current + scene.frame_subframe,
+                "clip_start": cam_eval.data.clip_start,
+                "clip_end": cam_eval.data.clip_end,
             },
             os.path.join(self.images_dir, filename),
         )
@@ -516,12 +554,19 @@ class RenderJob:
             raise PhotaraExportError("没有可导出的帧")
 
         props = self.props
-        initial_points = (self._indoor_plan.initial_points(self.records, self.images_dir)
-                          if self._indoor_plan else None)
+        initial_points, point_report = _build_surface_points(
+            self.context, self.records, self.images_dir)
         if self._indoor_plan is not None:
+            self._indoor_plan.update_completed_coverage(self.records)
+            self._indoor_plan.report["initial_surface_points"] = len(initial_points)
+            self._indoor_plan.report["initial_colored_points"] = len(initial_points)
+            self._indoor_plan.report["initial_gray_fallback_points"] = 0
+            self._indoor_plan.report["initial_point_color_source"] = "visible_surface_pixel_rays"
+            self._indoor_plan.report["initial_point_color_failures"] = point_report["image_failures"]
             self._indoor_plan.report["completed_images"] = len(self.records)
             self._indoor_plan.report["capture_completed"] = len(self.records) == len(self.frames)
             self._indoor_plan.write(self.dataset_dir)
+        surface_points.write_report(self.dataset_dir, point_report)
         self.written = colmap_export.write_dataset(
             self.dataset_dir,
             self.records,
@@ -538,6 +583,7 @@ class RenderJob:
                 ),
                 "image_format": props.image_format,
                 "capture_mode": props.capture_mode,
+                "initial_point_cloud": point_report,
                 **({"orbit_target": props.orbit_target.name,
                     "orbit_source_frame": int(self._original_frame),
                     "orbit_levels": props.orbit_levels,
@@ -556,7 +602,7 @@ class RenderJob:
             initial_points=initial_points,
         )
         self._exported = True
-        msg = "导出完成：{} 帧 → {}".format(len(self.records), self.dataset_dir)
+        msg = "导出完成：{} 帧，{} 个表面点 → {}".format(len(self.records), len(initial_points), self.dataset_dir)
 
         props.status = msg
         return True
@@ -703,6 +749,9 @@ def _record_poses_blocking(context):
                 "matrix_world": [list(row) for row in rigid_pose],
                 "width": width,
                 "height": height,
+                "scene_frame": scene.frame_current + scene.frame_subframe,
+                "clip_start": cam_eval.data.clip_start,
+                "clip_end": cam_eval.data.clip_end,
             }
         )
         current_intrinsics = (generator._indoor_plan.report["intrinsics"]
@@ -723,10 +772,14 @@ def _record_poses_blocking(context):
         if not os.path.isfile(os.path.join(images_dir, r["filename"]))
     ]
     os.makedirs(images_dir, exist_ok=True)
-    initial_points = None
+    existing_records = [record for record in records if record["filename"] not in missing]
+    initial_points, point_report = _build_surface_points(context, existing_records, images_dir)
+    surface_points.write_report(dataset_dir, point_report)
     if props.capture_mode == "BOX_GRID":
-        existing_records = [record for record in records if record["filename"] not in missing]
-        initial_points = generator._indoor_plan.initial_points(existing_records, images_dir)
+        generator._indoor_plan.update_completed_coverage(existing_records)
+        generator._indoor_plan.report["initial_surface_points"] = len(initial_points)
+        generator._indoor_plan.report["initial_colored_points"] = len(initial_points)
+        generator._indoor_plan.report["initial_gray_fallback_points"] = 0
         generator._indoor_plan.report["images_present"] = len(records) - len(missing)
         generator._indoor_plan.report["capture_completed"] = not missing
         generator._indoor_plan.write(dataset_dir)
@@ -743,6 +796,7 @@ def _record_poses_blocking(context):
             "frame_range": [frames[0], frames[-1], 1 if generated_poses is not None else props.frame_step],
             "image_format": props.image_format,
             "capture_mode": props.capture_mode,
+            "initial_point_cloud": point_report,
             **({"orbit_target": props.orbit_target.name,
                 "orbit_source_frame": int(original_frame),
                 "orbit_levels": props.orbit_levels,

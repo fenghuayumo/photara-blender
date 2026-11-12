@@ -78,22 +78,9 @@ def write_dataset(
                     )
                 )
 
-        with open(os.path.join(sparse_dir, "points3D.txt"), "w", encoding="utf-8") as f:
-            f.write("# POINT3D_ID X Y Z R G B ERROR TRACK[]\n")
-            for point_id, point in enumerate(initial_points or [], 1):
-                f.write("{} {} {} {} {} {} {} 0\n".format(
-                    point_id, *(_fmt(v) for v in point["position"]), *point["color"]))
         written.append("sparse/0/*.txt")
 
-    if initial_points:
-        with open(os.path.join(dataset_dir, "initial_points.ply"), "w", encoding="ascii") as f:
-            f.write("ply\nformat ascii 1.0\nelement vertex {}\n".format(len(initial_points)))
-            f.write("property float x\nproperty float y\nproperty float z\n")
-            f.write("property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n")
-            for point in initial_points:
-                f.write("{} {} {} {} {} {}\n".format(
-                    *(_fmt(v) for v in point["position"]), *point["color"]))
-        written.append("initial_points.ply")
+    written.extend(write_initial_cloud(dataset_dir, initial_points or [], write_colmap))
 
     if write_transforms:
         w, h = frames[0]["width"], frames[0]["height"]
@@ -128,6 +115,7 @@ def write_dataset(
                     "file_path": "images/{}".format(fr["filename"]),
                     "transform_matrix": [[float(v) for v in row] for row in fr["matrix_world"]],
                     "colmap_image_id": i,
+                    **{key: fr[key] for key in ("scene_frame", "clip_start", "clip_end") if key in fr},
                     "w": int(fr["width"]), "h": int(fr["height"]),
                     **{dst: float(fr.get("intrinsics", intrinsics)[src])
                        for dst, src in (("fl_x", "fx"), ("fl_y", "fy"), ("cx", "cx"), ("cy", "cy"))},
@@ -167,4 +155,28 @@ def write_dataset(
     with open(os.path.join(dataset_dir, "photara_dataset.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     written.append("photara_dataset.json")
+    return written
+
+
+def write_initial_cloud(dataset_dir, points, write_colmap=True):
+    """Write only cloud files; safe to use without changing existing cameras."""
+    written = []
+    if write_colmap:
+        sparse_dir = os.path.join(dataset_dir, "sparse", "0")
+        os.makedirs(sparse_dir, exist_ok=True)
+        with open(os.path.join(sparse_dir, "points3D.txt"), "w", encoding="utf-8") as stream:
+            stream.write("# POINT3D_ID X Y Z R G B ERROR TRACK[]\n")
+            for point_id, point in enumerate(points, 1):
+                stream.write("{} {} {} {} {} {} {} 0\n".format(
+                    point_id, *(_fmt(v) for v in point["position"]), *point["color"]))
+        written.append("sparse/0/points3D.txt")
+    if points:
+        with open(os.path.join(dataset_dir, "initial_points.ply"), "w", encoding="ascii") as stream:
+            stream.write("ply\nformat ascii 1.0\nelement vertex {}\n".format(len(points)))
+            stream.write("property float x\nproperty float y\nproperty float z\n")
+            stream.write("property uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n")
+            for point in points:
+                stream.write("{} {} {} {} {} {}\n".format(
+                    *(_fmt(v) for v in point["position"]), *point["color"]))
+        written.append("initial_points.ply")
     return written

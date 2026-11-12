@@ -61,6 +61,10 @@ class PHOTARA_PT_output(bpy.types.Panel):
         layout.prop(props, "overwrite")
         layout.prop(props, "export_colmap")
         layout.prop(props, "export_transforms_json")
+        layout.prop(props, "initial_point_count")
+        layout.prop(props, "point_samples_per_frame")
+        layout.prop(props, "point_merge_distance")
+        layout.operator("photara.rebuild_point_cloud", icon="POINTCLOUD_DATA")
 
 
 class PHOTARA_PT_frames(bpy.types.Panel):
