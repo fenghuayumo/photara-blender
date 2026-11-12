@@ -90,6 +90,9 @@ def unregister():
     flight_recording.shutdown()
     if flight_recording.before_load in bpy.app.handlers.load_pre:
         bpy.app.handlers.load_pre.remove(flight_recording.before_load)
-    del bpy.types.Scene.photara
+    # Blender 5.3 clears the property during shutdown before calling unregister.
+    if hasattr(bpy.types.Scene, "photara"):
+        del bpy.types.Scene.photara
     for cls in reversed(_classes()):
-        bpy.utils.unregister_class(cls)
+        if getattr(bpy.types, cls.__name__, None) is cls:
+            bpy.utils.unregister_class(cls)
