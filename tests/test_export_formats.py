@@ -46,7 +46,7 @@ class FormatTests(unittest.TestCase):
     def test_native_binary_header_checksum_cameras_and_tracks(self):
         frames, intr, points = self.fixtures()
         with tempfile.TemporaryDirectory() as directory:
-            colmap_export.write_dataset(directory, frames, intr, initial_points=points, export_format="PHOTARA")
+            colmap_export.write_dataset(directory, frames, intr, initial_points=points, export_format="PHOTARA", world_axes="BLENDER")
             data = (Path(directory)/"scene.asfm").read_bytes()
         self.assertEqual(data[:8], b"AETHSFM\0")
         version, minimum, length, expected = struct.unpack_from("<IIQQ", data, 8)
@@ -123,6 +123,19 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(dataset_source(props, "D:/data"), os.path.join("D:/data", "transforms.json"))
         props.export_format = "PHOTARA"
         self.assertTrue(dataset_source(props, "D:/data").endswith("scene.asfm"))
+
+    def test_native_world_rotation_preserves_tracks_and_roundtrips(self):
+        from photara_render.asfm_export import rotate_world
+        from photara_render.world_axes import BLENDER_TO_PHOTARA
+        frames, intr, points = self.fixtures()
+        with tempfile.TemporaryDirectory() as directory:
+            colmap_export.write_dataset(directory, frames, intr, initial_points=points,
+                                       export_format="PHOTARA", world_axes="BLENDER")
+            path = Path(directory) / "scene.asfm"
+            original = path.read_bytes()
+            self.assertEqual(rotate_world(path, BLENDER_TO_PHOTARA), {"images": 2, "tracks": 1})
+            rotate_world(path, BLENDER_TO_PHOTARA.T)
+            self.assertEqual(path.read_bytes(), original)
 
     def test_rebuild_uses_manifest_for_colmap_native_and_json(self):
         from photara_render import surface_points

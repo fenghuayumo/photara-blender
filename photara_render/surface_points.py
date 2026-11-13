@@ -231,12 +231,14 @@ def rebuild_dataset(context, directory, **options):
             destination = os.path.join(backup, relative)
             os.makedirs(os.path.dirname(destination), exist_ok=True)
             shutil.copy2(source, destination)
-    colmap_export.write_initial_cloud(directory, points, manifest.get("colmap", True))
+    from .world_axes import convert
+    export_records, export_points = convert(records, points, manifest.get("world_axes", "BLENDER"))
+    colmap_export.write_initial_cloud(directory, export_points, manifest.get("colmap", True))
     if transforms is not None and manifest.get("transforms_json", True):
         transforms["ply_file_path"] = "initial_points.ply"
     if manifest.get("export_format") == "PHOTARA":
         from .asfm_export import write_asfm
-        manifest["native_asfm"] = write_asfm(os.path.join(directory, "scene.asfm"), records, records[0]["intrinsics"], points)
+        manifest["native_asfm"] = write_asfm(os.path.join(directory, "scene.asfm"), export_records, records[0]["intrinsics"], export_points)
     manifest["initial_point_cloud"] = report
     for filename, data in ((path, transforms), (manifest_path, manifest)):
         if data is None:

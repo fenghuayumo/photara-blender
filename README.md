@@ -54,6 +54,13 @@ Blender → Edit → Preferences → Add-ons → Install… 选择生成的
 
 ### 导出格式
 
+World Axes 控制场景世界坐标，与相机的 OpenGL/OpenCV 光轴约定分开处理。Automatic 默认让 COLMAP、
+Photara 原生和双格式输出匹配 Studio 的 **-Y 向上**；Nerfstudio 默认保留 Blender **+Z 向上**。
+也可显式选择 Photara (-Y Up) 或 Blender (+Z Up)。Photara 转换为右手旋转 `(x,y,z) → (x,-z,y)`，
+同时作用于点云位置、相机位置和朝向，保持原图投影不变，不进行单轴镜像。采样和 capture_records
+始终保留 Blender 原坐标；从已保存相机重建点云时，再按 manifest 中保存的世界坐标设置写出，避免二次旋转。
+已有 Z-up 数据若手动在 Studio 里转正，加载重新导出的 -Y-up 数据时需清除旧的额外 Transform。
+
 | Dataset Format | 相机与位姿 | 点云 |
 |---|---|---|
 | COLMAP（默认） | `sparse/0/cameras.txt`、`images.txt`，OpenCV 世界到相机约定 | `points3D.txt` 与完整彩色 `initial_points.ply` |

@@ -5,6 +5,7 @@ import os
 import time
 
 from . import camera_utils
+from . import world_axes as axes_utils
 
 
 def _fmt(v):
@@ -21,6 +22,7 @@ def write_dataset(
     meta=None,
     initial_points=None,
     export_format=None,
+    world_axes="AUTO",
 ):
     """Write the dataset folder.
 
@@ -34,6 +36,9 @@ def write_dataset(
     write_native = export_format == "PHOTARA"
     if not frames or not (write_colmap or write_transforms or write_native):
         raise ValueError("Enable a camera export format and supply camera frames")
+    capture_records = frames
+    axes = axes_utils.resolve_axes(world_axes, export_format)
+    frames, initial_points = axes_utils.convert(frames, initial_points or [], axes)
     cameras = {}
     camera_ids = []
     for fr in frames:
@@ -147,10 +152,13 @@ def write_dataset(
         "transforms_json": write_transforms,
         "export_format": export_format or ("BOTH" if write_colmap and write_transforms else "COLMAP" if write_colmap else "NERFSTUDIO"),
         "native_asfm": native_info,
-        "capture_records": frames,
+        "capture_records": capture_records,
+        "world_axes": axes,
+        "blender_to_export_rotation": (axes_utils.BLENDER_TO_PHOTARA.tolist() if axes == "PHOTARA"
+                                       else [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
         "intrinsics": {k: float(v) for k, v in intrinsics.items()},
         "resolution": [int(frames[0]["width"]), int(frames[0]["height"])],
-        "up_axis": "Z",  # Blender world
+        "up_axis": "-Y" if axes == "PHOTARA" else "Z",
         "frames": [],
     }
     if meta:

@@ -313,6 +313,11 @@ class PhotaraProps(bpy.types.PropertyGroup):
                ("NERFSTUDIO", "Blender / Nerfstudio", "OpenGL transforms.json 与彩色 PLY", 2),
                ("BOTH", "COLMAP + Nerfstudio", "同时导出两种通用格式，兼容旧版设置", 3)),
         default="COLMAP", get=_get_export_format, set=_set_export_format)
+    export_world_axes: EnumProperty(name="World Axes", default="AUTO",
+        description="同时转换点云与相机的世界坐标，不改变原图投影；采样仍在 Blender 坐标中执行",
+        items=(("AUTO", "Automatic", "COLMAP/Photara 使用 -Y 向上，Nerfstudio 使用 Blender +Z 向上", 0),
+               ("PHOTARA", "Photara (-Y Up)", "(x,y,z) 映射为 (x,-z,y)，与 Studio 导航一致", 1),
+               ("BLENDER", "Blender (+Z Up)", "保留 Blender 世界坐标", 2)))
     initial_point_count: IntProperty(name="Initial Points", default=20000, min=100, max=1000000,
         description="所有采集模式共用的表面初始点云数量上限")
     point_samples_per_frame: IntProperty(name="Point Rays per Image", default=1024, min=16, max=65536,

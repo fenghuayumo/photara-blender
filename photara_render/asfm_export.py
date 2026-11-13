@@ -134,3 +134,57 @@ def repair_image_paths(path, images_dir):
             stream.write(data[:8] + _pack("IIQQ", version, minimum, len(result), digest(result)) + result)
         os.replace(temporary, path)
     return {"images": images, "changed_paths": changed}
+
+
+def rotate_world(path, rotation):
+    """Rotate native world positions and W2C poses, preserving image observations."""
+    with open(path, "rb") as stream:
+        data = bytearray(stream.read())
+    if data[:8] != b"AETHSFM\0":
+        raise ValueError("Not an ASFM file")
+    size, expected = struct.unpack_from("<QQ", data, 16)
+    check = 14695981039346656037
+    for value in data[32:]:
+        check = ((check ^ value) * 1099511628211) & 0xffffffffffffffff
+    if size != len(data)-32 or expected != check:
+        raise ValueError("Invalid ASFM payload or checksum")
+    rotation = np.asarray(rotation, dtype=float)
+    if not np.allclose(rotation.T @ rotation, np.eye(3)) or not np.isclose(np.linalg.det(rotation), 1):
+        raise ValueError("Expected a proper world rotation")
+    offset = 32
+    def count():
+        nonlocal offset
+        value, = struct.unpack_from("<Q", data, offset)
+        offset += 8
+        return value
+    for _ in range(count()):
+        length = count()
+        offset += length
+    images = count()
+    for _ in range(images):
+        length = count()
+        start = offset
+        path_length, = struct.unpack_from("<Q", data, start+8)
+        pose_offset = start+16+path_length
+        pose = np.array(struct.unpack_from("<12d", data, pose_offset))
+        r = pose[:9].reshape(3, 3) @ rotation.T
+        center = rotation @ pose[9:]
+        struct.pack_into("<12d", data, pose_offset, *r.ravel(), *center)
+        offset = start + length
+    tracks = count()
+    for _ in range(tracks):
+        length = count()
+        position = rotation @ np.array(struct.unpack_from("<3d", data, offset))
+        struct.pack_into("<3d", data, offset, *position)
+        offset += length
+    if offset != len(data):
+        raise ValueError("Unexpected ASFM trailing data")
+    checksum = 14695981039346656037
+    for value in data[32:]:
+        checksum = ((checksum ^ value) * 1099511628211) & 0xffffffffffffffff
+    struct.pack_into("<Q", data, 24, checksum)
+    temporary = str(path) + ".axes.tmp"
+    with open(temporary, "wb") as stream:
+        stream.write(data)
+    os.replace(temporary, path)
+    return {"images": images, "tracks": tracks}

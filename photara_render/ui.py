@@ -60,6 +60,7 @@ class PHOTARA_PT_output(bpy.types.Panel):
         layout.prop(props, "force_opaque")
         layout.prop(props, "overwrite")
         layout.prop(props, "export_format")
+        layout.prop(props, "export_world_axes")
         if props.export_format == "PHOTARA":
             layout.label(text="Open scene.asfm in Studio; full cloud: PLY", icon="INFO")
         layout.prop(props, "initial_point_count")

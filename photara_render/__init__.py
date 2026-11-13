@@ -16,6 +16,7 @@ if "bpy" in locals():
     _modules = (
         "props",
         "camera_utils",
+        "world_axes",
         "export_settings",
         "asfm_export",
         "colmap_export",

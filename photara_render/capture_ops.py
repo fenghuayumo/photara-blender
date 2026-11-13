@@ -608,6 +608,7 @@ class RenderJob:
             },
             initial_points=initial_points,
             export_format=selected_format(props),
+            world_axes=props.export_world_axes,
         )
         self._exported = True
         msg = "导出完成：{} 帧，{} 个表面点 → {}".format(len(self.records), len(initial_points), self.dataset_dir)
@@ -800,6 +801,7 @@ def _record_poses_blocking(context):
         write_transforms=props.export_transforms_json,
         initial_points=initial_points,
         export_format=selected_format(props),
+        world_axes=props.export_world_axes,
         meta={
             "blender_version": bpy.app.version_string,
             "frame_range": [frames[0], frames[-1], 1 if generated_poses is not None else props.frame_step],
