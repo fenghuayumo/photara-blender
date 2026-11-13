@@ -39,6 +39,7 @@ scene.camera = camera
 scene.render.resolution_x = scene.render.resolution_y = 64
 scene.render.resolution_percentage = 100
 props = scene.photara
+props.export_format = "BOTH"
 props.capture_mode = "BOX_GRID"
 props.box_bounds_object = bounds
 props.box_surface_samples = 160

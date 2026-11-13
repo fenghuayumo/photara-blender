@@ -16,6 +16,8 @@ if "bpy" in locals():
     _modules = (
         "props",
         "camera_utils",
+        "export_settings",
+        "asfm_export",
         "colmap_export",
         "photara_bridge",
         "image_pixels",

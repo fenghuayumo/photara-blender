@@ -137,6 +137,50 @@ def write_report(directory, report):
         json.dump(report, stream, indent=2)
 
 
+def add_observations(context, records, points, ignored_objects=()):
+    """Find up to two real visible image observations per seed for native tracks."""
+    if not points:
+        return
+    scene = context.scene
+    original = scene.frame_current + scene.frame_subframe
+    positions = np.asarray([point["position"] for point in points], dtype=float)
+    for point in points:
+        point["observations"] = []
+    try:
+        for image_index, frame in enumerate(records):
+            pending = [i for i, point in enumerate(points) if len(point["observations"]) < 2]
+            if not pending:
+                break
+            time = frame["scene_frame"]
+            scene.frame_set(math.floor(time), subframe=time - math.floor(time))
+            deps = context.evaluated_depsgraph_get()
+            hidden = _render_hidden(scene, ignored_objects)
+            matrix = np.asarray(frame["matrix_world"], dtype=float)
+            local = (positions[pending] - matrix[:3, 3]) @ matrix[:3, :3]
+            depth = -local[:, 2]
+            safe = np.maximum(depth, 1e-12)
+            intr = frame["intrinsics"]
+            u = intr["fx"] * local[:, 0] / safe + intr["cx"]
+            v = intr["cy"] - intr["fy"] * local[:, 1] / safe
+            mask = ((depth > frame.get("clip_start", .1)) & (depth < frame.get("clip_end", 1000)) &
+                    (u >= 0) & (v >= 0) & (u < frame["width"]) & (v < frame["height"]))
+            origin = Vector(matrix[:3, 3])
+            for candidate in np.flatnonzero(mask):
+                index = pending[candidate]
+                delta = Vector(points[index]["position"]) - origin
+                distance = delta.length
+                tolerance = max(1e-5, distance * 1e-5)
+                near = frame.get("clip_start", .1) * distance / depth[candidate]
+                direction = delta.normalized()
+                hit = _first_surface(scene, deps, origin + direction * near, direction,
+                                     distance - near + tolerance, hidden)
+                if hit is not None and (hit - Vector(points[index]["position"])).length < tolerance:
+                    points[index]["observations"].append({"image_index": image_index,
+                        "x": float(u[candidate]), "y": float(v[candidate])})
+    finally:
+        scene.frame_set(math.floor(original), subframe=original - math.floor(original))
+
+
 def rebuild_dataset(context, directory, **options):
     """Rebuild an existing export from its saved cameras, never current cameras.
 
@@ -145,16 +189,20 @@ def rebuild_dataset(context, directory, **options):
     """
     from . import colmap_export
     path = os.path.join(directory, "transforms.json")
-    with open(path, encoding="utf-8") as stream:
-        transforms = json.load(stream)
+    transforms = None
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as stream:
+            transforms = json.load(stream)
     manifest_path = os.path.join(directory, "photara_dataset.json")
     with open(manifest_path, encoding="utf-8") as stream:
         manifest = json.load(stream)
     mode = manifest.get("capture_mode", "ANIMATION")
     start, _, step = manifest.get("frame_range", [1, 1, 1])
     fixed_time = manifest.get("orbit_source_frame", manifest.get("box_source_frame"))
-    records = []
-    for index, frame in enumerate(transforms["frames"]):
+    records = list(manifest.get("capture_records", []))
+    if not records and transforms is None:
+        raise ValueError("缺少导出相机记录；请使用新版重新导出位姿")
+    for index, frame in enumerate(transforms["frames"] if not records else []):
         time = frame.get("scene_frame", start + index * step if mode == "ANIMATION" else fixed_time)
         if time is None:
             raise ValueError("缺少采集时的场景帧，无法安全重建表面点云")
@@ -172,7 +220,9 @@ def rebuild_dataset(context, directory, **options):
     points, report = build(context, records, os.path.join(directory, "images"), **options)
     if not points or report["image_failures"]:
         raise ValueError("未生成有效点云或有图像读取失败；保留原数据，请检查场景、可见性和图片")
-    files = ["transforms.json", "photara_dataset.json", "initial_points.ply",
+    if manifest.get("export_format") == "PHOTARA":
+        add_observations(context, records, points, options.get("ignored_objects", ()))
+    files = ["transforms.json", "photara_dataset.json", "initial_points.ply", "scene.asfm",
              "sparse/0/points3D.txt", "initial_points_report.json"]
     backup = os.path.join(directory, "point_cloud_backups", datetime.now().strftime("%Y%m%d_%H%M%S_%f"))
     for relative in files:
@@ -182,9 +232,15 @@ def rebuild_dataset(context, directory, **options):
             os.makedirs(os.path.dirname(destination), exist_ok=True)
             shutil.copy2(source, destination)
     colmap_export.write_initial_cloud(directory, points, manifest.get("colmap", True))
-    transforms["ply_file_path"] = "initial_points.ply"
+    if transforms is not None and manifest.get("transforms_json", True):
+        transforms["ply_file_path"] = "initial_points.ply"
+    if manifest.get("export_format") == "PHOTARA":
+        from .asfm_export import write_asfm
+        manifest["native_asfm"] = write_asfm(os.path.join(directory, "scene.asfm"), records, records[0]["intrinsics"], points)
     manifest["initial_point_cloud"] = report
     for filename, data in ((path, transforms), (manifest_path, manifest)):
+        if data is None:
+            continue
         with open(filename, "w", encoding="utf-8") as stream:
             json.dump(data, stream, indent=2)
     write_report(directory, report)

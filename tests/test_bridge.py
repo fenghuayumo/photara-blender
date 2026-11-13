@@ -4,6 +4,14 @@ from types import SimpleNamespace
 import tempfile, os
 from photara_render import photara_bridge as bridge
 class BridgeTests(unittest.TestCase):
+ def test_native_export_does_not_call_unsupported_dataset_rpc(self):
+  props=SimpleNamespace(export_format='PHOTARA',handover_mode='AUTO')
+  with patch.object(bridge,'rpc') as rpc,patch.object(bridge,'discover_studio') as discover:
+   result=bridge.run_bridge(props,'D:/dataset')
+   self.assertTrue(result.ok)
+   self.assertIn('scene.asfm',result.message)
+   rpc.assert_not_called()
+   discover.assert_not_called()
  def test_json_only_handover_selects_file(self):
   props=SimpleNamespace(export_colmap=False, auto_start_training=True)
   with patch.object(bridge,'rpc',side_effect=[{'message':'loaded'},{'op_id':'train'}]) as rpc:

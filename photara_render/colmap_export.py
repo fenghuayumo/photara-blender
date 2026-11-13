@@ -20,6 +20,7 @@ def write_dataset(
     write_transforms=True,
     meta=None,
     initial_points=None,
+    export_format=None,
 ):
     """Write the dataset folder.
 
@@ -27,7 +28,11 @@ def write_dataset(
     ``intrinsics``: dict {fx, fy, cx, cy} (constant across frames for this addon).
     The COLMAP sparse model is written as text, which COLMAP / 3DGS loaders accept.
     """
-    if not frames or not (write_colmap or write_transforms):
+    if export_format:
+        write_colmap = export_format in {"COLMAP", "BOTH"}
+        write_transforms = export_format in {"NERFSTUDIO", "BOTH"}
+    write_native = export_format == "PHOTARA"
+    if not frames or not (write_colmap or write_transforms or write_native):
         raise ValueError("Enable a camera export format and supply camera frames")
     cameras = {}
     camera_ids = []
@@ -81,6 +86,11 @@ def write_dataset(
         written.append("sparse/0/*.txt")
 
     written.extend(write_initial_cloud(dataset_dir, initial_points or [], write_colmap))
+    native_info = None
+    if write_native:
+        from .asfm_export import write_asfm
+        native_info = write_asfm(os.path.join(dataset_dir, "scene.asfm"), frames, intrinsics, initial_points or [])
+        written.append("scene.asfm")
 
     if write_transforms:
         w, h = frames[0]["width"], frames[0]["height"]
@@ -135,6 +145,9 @@ def write_dataset(
         "image_count": len(frames),
         "colmap": write_colmap,
         "transforms_json": write_transforms,
+        "export_format": export_format or ("BOTH" if write_colmap and write_transforms else "COLMAP" if write_colmap else "NERFSTUDIO"),
+        "native_asfm": native_info,
+        "capture_records": frames,
         "intrinsics": {k: float(v) for k, v in intrinsics.items()},
         "resolution": [int(frames[0]["width"]), int(frames[0]["height"])],
         "up_axis": "Z",  # Blender world

@@ -28,6 +28,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from .export_settings import selected_format, dataset_source
 
 
 DEFAULT_STUDIO_ARGS = "--enable-agent-control"
@@ -187,6 +188,8 @@ def rpc(endpoint, method, params, timeout=8.0, request_id=None):
 
 def handover_to_studio(props, dataset_dir, endpoint=None):
     """Attach the dataset in a running Studio and optionally start training."""
+    if selected_format(props) == "PHOTARA":
+        return "原生格式已导出：{}。当前 Studio RPC 不支持原生场景导入，请将 .asfm 拖入 Studio；完整点云同时保存在 initial_points.ply。".format(dataset_source(props, dataset_dir))
     if endpoint is None:
         endpoint = discover_studio(timeout=float(props.studio_timeout))
     if endpoint is None:
@@ -200,7 +203,7 @@ def handover_to_studio(props, dataset_dir, endpoint=None):
 
     images_dir = os.path.join(dataset_dir, "images")
     # Select the freshly exported format explicitly; old COLMAP files may remain.
-    source = dataset_dir if getattr(props, "export_colmap", True) else os.path.join(dataset_dir, "transforms.json")
+    source = dataset_source(props, dataset_dir)
     try:
         result = rpc(endpoint, "studio.project.set_dataset", {"path": source})
         message = "已连接 Studio（session {}）：{}".format(
@@ -348,6 +351,8 @@ def launch_studio_and_train(props, dataset_dir):
 
 
 def run_cli_training(props, dataset_dir):
+    if selected_format(props) == "PHOTARA":
+        raise BridgeError("原生 .asfm 已导出；当前 --splat-dataset 不支持 .asfm，请在 Studio 中打开原生场景，或选择 COLMAP/Nerfstudio 自动训练")
     exe = find_photara_executable("cli", props.cli_exe)
     if not exe:
         raise BridgeError(
@@ -359,9 +364,9 @@ def run_cli_training(props, dataset_dir):
     argv = [exe] + parse_launch_args(
         args, {"dataset": dataset_dir, "name": props.dataset_name}
     )
-    if not getattr(props, "export_colmap", True) and "--splat-dataset" in argv:
+    if "--splat-dataset" in argv:
         index = argv.index("--splat-dataset") + 1
-        argv[index] = os.path.join(dataset_dir, "transforms.json")
+        argv[index] = dataset_source(props, dataset_dir)
     log_path = os.path.join(dataset_dir, "photara_train.log")
     try:
         with open(log_path, "ab") as log:
@@ -376,6 +381,8 @@ def run_bridge(props, dataset_dir):
     mode = props.handover_mode
     if mode == "OFF":
         return None
+    if selected_format(props) == "PHOTARA":
+        return BridgeResult(True, handover_to_studio(props, dataset_dir))
     try:
         if mode == "CLI":
             return BridgeResult(True, run_cli_training(props, dataset_dir))
@@ -415,6 +422,7 @@ class PropsSnapshot:
     def __init__(self, props):
         self.dataset_name = props.dataset_name
         self.export_colmap = props.export_colmap
+        self.export_format = selected_format(props)
         self.handover_mode = props.handover_mode
         self.auto_start_training = props.auto_start_training
         self.studio_timeout = props.studio_timeout

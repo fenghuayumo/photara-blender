@@ -37,6 +37,7 @@ Blender → Edit → Preferences → Add-ons → Install… 选择生成的
 1. 打开侧边栏：View3D → N 面板 → **Photara**
 2. 设置：
    - **Output Root**：数据集输出目录（默认 `//photara_dataset`，即 blend 文件旁）
+   - **Dataset Format**：选择下表中的相机与点云格式；与动画、环绕、室内点阵采集模式无关
    - **Camera & Frames**：选择相机（留空用场景相机）和采集模式
      - **Camera Animation**：按场景范围或自定义帧范围采样已有相机动画
      - **Object 360° Orbit**：选择目标物体，设置总张数、垂直环绕层数、最低/最高仰角、物体尺寸倍数定义的球面半径和起始角；插件将张数分配到各仰角层，自动生成球面透视相机点位
@@ -50,6 +51,28 @@ Blender → Edit → Preferences → Add-ons → Install… 选择生成的
 > Studio 需要 `--enable-agent-control` 启动才会暴露控制接口；
 > AUTO 模式由插件自动带上该参数。若 Studio 在运行但未开启控制接口，
 > 插件会提示而不是盲目启动第二个实例。
+
+### 导出格式
+
+| Dataset Format | 相机与位姿 | 点云 |
+|---|---|---|
+| COLMAP（默认） | `sparse/0/cameras.txt`、`images.txt`，OpenCV 世界到相机约定 | `points3D.txt` 与完整彩色 `initial_points.ply` |
+| Photara Studio Native (.asfm) | `scene.asfm`，Photara 原生世界到相机旋转与相机中心 | `.asfm` 内的多视图稀疏轨迹；完整表面点保存在 PLY |
+| Blender / Nerfstudio | `transforms.json`，OpenGL 相机到世界矩阵，逐帧内参 | 通过 `ply_file_path` 引用完整彩色 PLY |
+| COLMAP + Nerfstudio | 同时写出两种通用格式，兼容旧版双选项 | 两者使用同一份表面点云 |
+
+原生 ASFM 按 `photara/src/sfm/asfm.cpp` 的非紧凑 v4 二进制布局写出（长度前缀、FNV-1a 校验、
+绝对图像路径（兼容 Studio 的图像目录基准与独立 ASFM 读取））。原生稀疏轨迹要求至少两个有效图像观测，插件会重新投影实际表面点并检查遮挡，
+只写入通过验证的轨迹。仅单视图可见的几何点仍保留在完整 PLY 中；manifest 会报告两种点数，
+不会伪造第二个观测。`.asfm` 可直接在 Studio 中打开或拖入视口。
+
+当前 Studio 的 `project.set_dataset` 和 CLI `--splat-dataset` 读取器尚不支持 `.asfm`，因此选择原生
+格式后插件只导出并提示在 Studio 打开，不启动自动训练。需要现有自动交付/训练流程时选择 COLMAP
+或 Nerfstudio，插件会明确传递对应的模型目录或 JSON 文件，避免误读目录中残留的其他格式。
+
+所有格式均保留 `photara_dataset.json` 中的完整采集记录，使“从已保存相机重建点云”不依赖是否导出了
+`transforms.json`。切换格式不删除旧格式文件；本次 manifest 标记当前选择。旧 `.blend` 中保存的双
+复选框设置会映射为对应选项；显式选择 Dataset Format 后以新选择为准。
 
 360° 环绕使用所选相机作为镜头参数模板，并在渲染期间创建临时相机；
 目标中心按当前场景帧求值。默认使用上半球、4 层，适合放置在水平承托面上的物体；

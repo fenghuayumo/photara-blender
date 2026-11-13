@@ -26,6 +26,21 @@ def _poll_orbit_orientation(self, obj):
     return obj is not None and obj.type == "EMPTY"
 
 
+def _get_export_format(self):
+    if "export_format" in self:
+        return self["export_format"]
+    if self.is_property_set("export_colmap") or self.is_property_set("export_transforms_json"):
+        if self.export_colmap and self.export_transforms_json:
+            return 3
+        if not self.export_colmap and self.export_transforms_json:
+            return 2
+    return 0
+
+
+def _set_export_format(self, value):
+    self["export_format"] = value
+
+
 class PhotaraProps(bpy.types.PropertyGroup):
     flight_control: EnumProperty(
         name="Camera Control",
@@ -290,6 +305,14 @@ class PhotaraProps(bpy.types.PropertyGroup):
     )
 
     # ------------------------------------------------------------------ export
+    export_format: EnumProperty(
+        name="Dataset Format",
+        description="选择相机位姿与彩色表面点云的导出格式，与采集模式无关",
+        items=(("COLMAP", "COLMAP", "PINHOLE 相机、位姿、points3D.txt 和 PLY", 0),
+               ("PHOTARA", "Photara Studio Native (.asfm)", "原生相机与多视图稀疏轨迹，以及完整彩色 PLY；在 Studio 中打开 .asfm", 1),
+               ("NERFSTUDIO", "Blender / Nerfstudio", "OpenGL transforms.json 与彩色 PLY", 2),
+               ("BOTH", "COLMAP + Nerfstudio", "同时导出两种通用格式，兼容旧版设置", 3)),
+        default="COLMAP", get=_get_export_format, set=_set_export_format)
     initial_point_count: IntProperty(name="Initial Points", default=20000, min=100, max=1000000,
         description="所有采集模式共用的表面初始点云数量上限")
     point_samples_per_frame: IntProperty(name="Point Rays per Image", default=1024, min=16, max=65536,

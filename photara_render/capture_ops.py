@@ -8,6 +8,7 @@ import bpy
 from mathutils import Vector
 
 from . import camera_utils, colmap_export, photara_bridge, indoor_capture, surface_points
+from .export_settings import selected_format
 
 
 FORMAT_EXT = {
@@ -123,9 +124,15 @@ def _build_surface_points(context, records, images_dir):
     ignored = ([props.box_bounds_object] if props.capture_mode == "BOX_GRID"
                and props.box_bounds_helper and props.box_bounds_object else [])
     props.status = "正在生成可见表面初始点云…"
-    return surface_points.build(context, records, images_dir,
+    points, report = surface_points.build(context, records, images_dir,
         max_points=props.initial_point_count, samples_per_frame=props.point_samples_per_frame,
         merge_distance=props.point_merge_distance, ignored_objects=ignored)
+    if selected_format(props) == "PHOTARA":
+        props.status = "正在验证原生稀疏轨迹的多视图观测…"
+        surface_points.add_observations(context, records, points, ignored)
+        report["native_sparse_tracks"] = sum(len(p.get("observations", [])) >= 2 for p in points)
+        report["native_single_view_points_in_ply_only"] = len(points) - report["native_sparse_tracks"]
+    return points, report
 
 
 class PHOTARA_OT_rebuild_point_cloud(bpy.types.Operator):
@@ -235,7 +242,7 @@ class RenderJob:
         if not self.frames:
             raise PhotaraExportError("帧范围为空")
 
-        if not (props.export_colmap or props.export_transforms_json):
+        if selected_format(props) == "NONE":
             raise PhotaraExportError("请至少启用 COLMAP 或 transforms.json 导出")
         if scene.render.use_border:
             raise PhotaraExportError("请关闭 Render Region 后导出完整图像")
@@ -600,6 +607,7 @@ class RenderJob:
                    if props.capture_mode == "BOX_GRID" else {}),
             },
             initial_points=initial_points,
+            export_format=selected_format(props),
         )
         self._exported = True
         msg = "导出完成：{} 帧，{} 个表面点 → {}".format(len(self.records), len(initial_points), self.dataset_dir)
@@ -791,6 +799,7 @@ def _record_poses_blocking(context):
         write_colmap=props.export_colmap,
         write_transforms=props.export_transforms_json,
         initial_points=initial_points,
+        export_format=selected_format(props),
         meta={
             "blender_version": bpy.app.version_string,
             "frame_range": [frames[0], frames[-1], 1 if generated_poses is not None else props.frame_step],
